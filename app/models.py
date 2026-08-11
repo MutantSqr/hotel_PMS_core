@@ -102,7 +102,15 @@ class Vehicle:
 
 
 class Billing:
-    def __init__(self, billing_id, guest, room, reservation, amount_due, amount_paid, balance, billing_date,
+    """
+    FIX: balance is now a derived @property instead of a stored value the
+    caller had to compute and pass in. It is mathematically impossible for
+    it to drift out of sync with amount_due / amount_paid now, which is what
+    the README's "auto-calculated ledger balances" claim was actually
+    supposed to mean.
+    """
+
+    def __init__(self, billing_id, guest, room, reservation, amount_due, amount_paid, billing_date,
                  payment_method):
         if not billing_id or not billing_id.strip():
             raise ValueError("Error: Billing ID cannot be empty")
@@ -114,10 +122,6 @@ class Billing:
             raise ValueError("Error: Amount due cannot be negative")
         if amount_paid < 0:
             raise ValueError("Error: Amount paid cannot be negative")
-
-        calculated_balance = amount_due - amount_paid
-        if balance != calculated_balance:
-            raise ValueError(f"Error: Balance must equal amount_due - amount_paid ({calculated_balance})")
         if not payment_method or not payment_method.strip():
             raise ValueError("Error: Payment method cannot be empty")
 
@@ -126,7 +130,20 @@ class Billing:
         self.room = room
         self.reservation = reservation
         self.amount_due = amount_due
-        self.amount_paid = amount_paid
-        self.balance = balance
+        self._amount_paid = amount_paid
         self.billing_date = billing_date
         self.payment_method = payment_method
+
+    @property
+    def amount_paid(self):
+        return self._amount_paid
+
+    @amount_paid.setter
+    def amount_paid(self, value):
+        if value < 0:
+            raise ValueError("Error: Amount paid cannot be negative")
+        self._amount_paid = value
+
+    @property
+    def balance(self):
+        return self.amount_due - self._amount_paid
