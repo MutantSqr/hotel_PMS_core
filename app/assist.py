@@ -10,15 +10,63 @@ class HotelAssistant:
         self.vehicles = {}
         self.billing_records = {}
         self.billing_counter = 0
+        # FIX: per-reservation name -> confirmation_number map, built once at
+        # add_reservation time. This replaces the old global "search every
+        # guest in the hotel by name" lookup used inside check_in/check_out,
+        # which could silently grab the wrong guest if two people shared a
+        # name anywhere in the system.
+        self._reservation_guest_map = {}
+
+    # -----------------------------------------------------------------
+    # Registry methods
+    # FIX: all three now reject duplicate keys instead of silently
+    # overwriting existing rooms / reservations / guests.
+    # -----------------------------------------------------------------
 
     def add_room(self, room):
+        if room.room_number in self.rooms:
+            raise ValueError(f"Error: Room {room.room_number} already exists")
         self.rooms[room.room_number] = room
 
     def add_reservation(self, reservation):
+        if reservation.reservation_id in self.reservations:
+            raise ValueError(f"Error: Reservation {reservation.reservation_id} already exists")
+
+        # FIX: resolve every guest_name on this reservation to an actual
+        # registered Guest right now, at reservation-creation time, instead
+        # of waiting until check-in and hoping a name-based search finds the
+        # right person. Ambiguous or missing guests fail loudly, here,
+        # before the reservation is accepted.
+        guest_map = {}
+        for name in reservation.guest_names:
+            matches = [g for g in self.guests.values() if g.name == name]
+            if len(matches) == 0:
+                raise ValueError(f"Error: Guest '{name}' is not registered in the system")
+            if len(matches) > 1:
+                raise ValueError(
+                    f"Error: Guest name '{name}' is ambiguous ({len(matches)} matches). "
+                    f"Register guests with unique names or resolve by confirmation number."
+                )
+            guest_map[name] = matches[0].confirmation_number
+
         self.reservations[reservation.reservation_id] = reservation
+        self._reservation_guest_map[reservation.reservation_id] = guest_map
+
+        # FIX: this was the core bug. Nothing previously moved a room into
+        # "reserved" status, so check_in_guest's requirement that the room
+        # already be "reserved" could never be satisfied.
+        if reservation.room.out_of_order:
+            raise ValueError(f"Error: Room {reservation.room.room_number} is out of order and cannot be reserved")
+        reservation.room.occupancy_status = "reserved"
 
     def add_guest(self, guest):
+        if guest.confirmation_number in self.guests:
+            raise ValueError(f"Error: Guest with confirmation {guest.confirmation_number} already exists")
         self.guests[guest.confirmation_number] = guest
+
+    # -----------------------------------------------------------------
+    # Check-in / Check-out
+    # -----------------------------------------------------------------
 
     def check_in_guest(self, reservation_id, guest_name, vehicle=None):
         if reservation_id not in self.reservations:
@@ -28,6 +76,11 @@ class HotelAssistant:
 
         if guest_name not in reservation.guest_names:
             raise ValueError(f"Error: Guest '{guest_name}' is not part of reservation {reservation_id}")
+
+        # FIX: added guard. Previously nothing stopped the same reservation
+        # from being checked in twice.
+        if reservation.checked_in:
+            raise ValueError(f"Error: Reservation {reservation_id} has already been checked in")
 
         room_number = reservation.room.room_number
         if room_number not in self.rooms:
@@ -41,22 +94,13 @@ class HotelAssistant:
         if room.out_of_order:
             raise ValueError(f"Error: Room {room_number} is out of order")
 
-        room.occupancy_status = "occupied"
-        room.current_guest = guest_name
-
-        if vehicle:
-            room.vehicle = vehicle
-            self.vehicles[vehicle.vehicle_id] = vehicle
-
-        reservation.checked_in = True
+        # FIX: O(1) lookup via the map built in add_reservation, instead of
+        # scanning every guest in the hotel by name.
+        confirmation_number = self._reservation_guest_map[reservation_id][guest_name]
+        guest = self.guests[confirmation_number]
 
         total_bill = reservation.calculate_total_expected_bill()
-        self.billing_counter += 1
-        billing_id = f"BILL{self.billing_counter:04d}"
-
-        guest = next((g for g in self.guests.values() if g.name == guest_name), None)
-        if guest is None:
-            raise ValueError(f"Error: Guest '{guest_name}' not found in system")
+        billing_id = f"BILL{self.billing_counter + 1:04d}"
 
         billing = Billing(
             billing_id=billing_id,
@@ -65,11 +109,19 @@ class HotelAssistant:
             reservation=reservation,
             amount_due=total_bill,
             amount_paid=0,
-            balance=total_bill,
             billing_date=datetime.now(),
             payment_method="Pending"
         )
 
+        room.occupancy_status = "occupied"
+        room.current_guest = guest_name
+
+        if vehicle:
+            room.vehicle = vehicle
+            self.vehicles[vehicle.vehicle_id] = vehicle
+
+        reservation.checked_in = True
+        self.billing_counter += 1
         self.billing_records[billing_id] = billing
 
         return {
@@ -93,6 +145,15 @@ class HotelAssistant:
         if not reservation.checked_in:
             raise ValueError(f"Error: Guest '{guest_name}' has not checked in yet")
 
+        # FIX: added guard. Previously nothing stopped a reservation from
+        # being checked out twice, which would double-clear the vehicle
+        # and re-flip an already-available room.
+        if reservation.checked_out:
+            raise ValueError(f"Error: Guest '{guest_name}' has already been checked out")
+
+        if amount_paid < 0:
+            raise ValueError("Error: Amount paid cannot be negative")
+
         room_number = reservation.room.room_number
         if room_number not in self.rooms:
             raise ValueError(f"Error: Room {room_number} not found")
@@ -102,30 +163,37 @@ class HotelAssistant:
         if room.current_guest != guest_name:
             raise ValueError(f"Error: Guest '{guest_name}' is not currently in room {room_number}")
 
-        vehicle_removed = None
-        if room.vehicle:
-            vehicle_removed = room.vehicle.vehicle_id
-            del self.vehicles[room.vehicle.vehicle_id]
-            room.vehicle = None
-
-        room.occupancy_status = "available"
-        room.current_guest = None
-        reservation.checked_out = True
-
+        # FIX: match the billing record by confirmation number rather than
+        # by name, using the same resolved map from add_reservation.
+        confirmation_number = self._reservation_guest_map[reservation_id][guest_name]
         billing_record = next(
             (b for b in self.billing_records.values()
-             if b.reservation.reservation_id == reservation_id and b.guest.name == guest_name),
+             if b.reservation.reservation_id == reservation_id
+             and b.guest.confirmation_number == confirmation_number),
             None
         )
 
         if billing_record is None:
             raise ValueError(f"Error: No billing record found for reservation {reservation_id}")
 
+        vehicle_removed = None
+        if room.vehicle:
+            vehicle_removed = room.vehicle.vehicle_id
+
+        # amount_paid is now a validated property on Billing itself; balance
+        # is derived automatically and can no longer be set directly.
         billing_record.amount_paid = amount_paid
-        billing_record.balance = billing_record.amount_due - amount_paid
 
         if amount_paid > 0:
             billing_record.payment_method = "Paid"
+
+        if vehicle_removed:
+            del self.vehicles[vehicle_removed]
+            room.vehicle = None
+
+        room.occupancy_status = "available"
+        room.current_guest = None
+        reservation.checked_out = True
 
         return {
             "status": "success",
