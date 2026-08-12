@@ -10,6 +10,7 @@ class HotelAssistant:
         self.vehicles = {}
         self.billing_records = {}
         self.billing_counter = 0
+        self.pm_accounts = {}
         self._reservation_guest_map = {}
 
     def add_room(self, room):
@@ -28,22 +29,21 @@ class HotelAssistant:
         if reservation.reservation_id in self.reservations:
             raise ValueError(f"Error: Reservation {reservation.reservation_id} already exists")
 
-        if reservation.room.room_number not in self.rooms:
-            raise ValueError(f"Error: Room {reservation.room.room_number} not found")
+        room_number = reservation.room.room_number
+        if room_number not in self.rooms:
+            raise ValueError(f"Error: Room {room_number} not found")
 
         if reservation.room.out_of_order:
-            raise ValueError(
-                f"Error: Room {reservation.room.room_number} is out of order and cannot be reserved"
-            )
+            raise ValueError(f"Error: Room {room_number} is out of order and cannot be reserved")
 
         for existing in self.reservations.values():
-            if existing.room.room_number != reservation.room.room_number:
+            if existing.room.room_number != room_number:
                 continue
             if getattr(existing, "status", "confirmed") in {"cancelled", "no_show"}:
                 continue
             if self._reservation_dates_overlap(existing, reservation):
                 raise ValueError(
-                    f"Error: Room {reservation.room.room_number} is already reserved "
+                    f"Error: Room {room_number} is already reserved "
                     f"from {existing.check_in_date} to {existing.check_out_date} "
                     f"by reservation {existing.reservation_id}"
                 )
@@ -91,7 +91,7 @@ class HotelAssistant:
         self.billing_records[billing_id] = billing
         return billing
 
-    def check_in_guest(self, reservation_id, guest_name, vehicle=None):
+    def check_in_guest(self, reservation_id, guest_name, vehicle=None, accompanying_guest_names=None):
         if reservation_id not in self.reservations:
             raise ValueError(f"Error: Reservation {reservation_id} not found")
 
@@ -99,24 +99,32 @@ class HotelAssistant:
 
         if guest_name not in reservation.guest_names:
             raise ValueError(f"Error: Guest '{guest_name}' is not part of reservation {reservation_id}")
-
         if reservation.status in {"cancelled", "no_show", "checked_out"}:
             raise ValueError(f"Error: Reservation {reservation_id} is not eligible for check-in")
-
         if reservation.checked_in:
             raise ValueError(f"Error: Reservation {reservation_id} has already been checked in")
 
         room_number = reservation.room.room_number
         if room_number not in self.rooms:
             raise ValueError(f"Error: Room {room_number} not found")
-
         room = self.rooms[room_number]
 
         if room.occupancy_status == "occupied":
             raise ValueError(f"Error: Room {room_number} is currently occupied")
-
         if room.out_of_order:
             raise ValueError(f"Error: Room {room_number} is out of order")
+
+        accompanying_guest_names = accompanying_guest_names or []
+        check_in_names = [guest_name] + accompanying_guest_names
+        if len(check_in_names) > room.capacity:
+            raise ValueError(f"Error: Room {room_number} can accommodate only {room.capacity} guests")
+        if len(set(check_in_names)) != len(check_in_names):
+            raise ValueError("Error: A guest cannot be checked in more than once")
+        for name in check_in_names:
+            if name not in reservation.guest_names:
+                raise ValueError(f"Error: Guest '{name}' is not part of reservation {reservation_id}")
+            if name not in self._reservation_guest_map[reservation_id]:
+                raise ValueError(f"Error: Guest '{name}' is not registered in the system")
 
         guest = self._get_reservation_guest(reservation_id, guest_name)
         total_bill = reservation.calculate_total_expected_bill()
@@ -124,6 +132,7 @@ class HotelAssistant:
 
         room.occupancy_status = "occupied"
         room.current_guest = guest_name
+        room.current_guests = check_in_names
 
         if vehicle:
             room.vehicle = vehicle
@@ -138,33 +147,31 @@ class HotelAssistant:
             "room_number": room_number,
             "billing_id": billing.billing_id,
             "amount_due": total_bill,
-            "vehicle": vehicle.vehicle_id if vehicle else "None"
+            "vehicle": vehicle.vehicle_id if vehicle else "None",
+            "guests": check_in_names
         }
 
-    def check_out_guest(self, reservation_id, guest_name, amount_paid=0):
+    def check_out_guest(self, reservation_id, guest_name, amount_paid=0,
+                        night_audit=False, transfer_to_pm=False):
         if reservation_id not in self.reservations:
             raise ValueError(f"Error: Reservation {reservation_id} not found")
 
         reservation = self.reservations[reservation_id]
-
         if guest_name not in reservation.guest_names:
             raise ValueError(f"Error: Guest '{guest_name}' is not part of reservation {reservation_id}")
-
         if not reservation.checked_in:
             raise ValueError(f"Error: Guest '{guest_name}' has not checked in yet")
-
         if reservation.checked_out:
             raise ValueError(f"Error: Guest '{guest_name}' has already been checked out")
-
         if amount_paid < 0:
             raise ValueError("Error: Amount paid cannot be negative")
+        if night_audit and transfer_to_pm:
+            raise ValueError("Error: A bill cannot be settled by night audit and transferred to a PM account at the same time")
 
         room_number = reservation.room.room_number
         if room_number not in self.rooms:
             raise ValueError(f"Error: Room {room_number} not found")
-
         room = self.rooms[room_number]
-
         if room.current_guest != guest_name:
             raise ValueError(f"Error: Guest '{guest_name}' is not currently in room {room_number}")
 
@@ -175,24 +182,34 @@ class HotelAssistant:
              and b.guest.confirmation_number == confirmation_number),
             None
         )
-
         if billing_record is None:
             raise ValueError(f"Error: No billing record found for reservation {reservation_id}")
+
+        proposed_balance = round(billing_record.amount_due - amount_paid, 2)
+        if proposed_balance > 0 and not night_audit and not transfer_to_pm:
+            raise ValueError(
+                f"Error: Outstanding balance of {proposed_balance:.2f} requires night audit settlement or PM account transfer"
+            )
+
+        billing_record.amount_paid = amount_paid
+        if night_audit and proposed_balance > 0:
+            billing_record.amount_paid = billing_record.amount_due
+            billing_record.payment_method = "Night Audit Settlement"
+        elif transfer_to_pm and proposed_balance > 0:
+            billing_record.transfer_to_pm_account()
+            self.pm_accounts[billing_record.billing_id] = billing_record.balance
+        elif amount_paid > 0:
+            billing_record.payment_method = "Paid"
 
         vehicle_removed = None
         if room.vehicle:
             vehicle_removed = room.vehicle.vehicle_id
-
-        billing_record.amount_paid = amount_paid
-        if amount_paid > 0:
-            billing_record.payment_method = "Paid"
-
-        if vehicle_removed:
             del self.vehicles[vehicle_removed]
             room.vehicle = None
 
         room.occupancy_status = "available"
         room.current_guest = None
+        room.current_guests = []
         reservation.checked_out = True
         reservation.status = "checked_out"
 
@@ -202,18 +219,15 @@ class HotelAssistant:
             "room_number": room_number,
             "billing_id": billing_record.billing_id,
             "amount_due": billing_record.amount_due,
-            "amount_paid": amount_paid,
+            "amount_paid": billing_record.amount_paid,
             "balance": billing_record.balance,
+            "credit": billing_record.credit,
+            "pm_account": billing_record.pm_account,
             "vehicle_removed": vehicle_removed if vehicle_removed else "None"
         }
 
     def run_night_audit(self, audit_datetime, tax_rate):
-        """Process no-shows at the 2:30 AM Night Audit cutoff.
-
-        The audit at 2:30 AM processes the prior business day's arrivals.
-        A no-show is charged one room night plus tax, then its room is
-        released for future inventory.
-        """
+        """Process arrivals from the prior business date at the 2:30 AM cutoff."""
         if audit_datetime.hour < 2 or (audit_datetime.hour == 2 and audit_datetime.minute < 30):
             raise ValueError("Error: Night Audit no-show processing cannot run before 2:30 AM")
         if not 0 <= tax_rate <= 1:
@@ -228,11 +242,9 @@ class HotelAssistant:
             if reservation.status != "confirmed" or reservation.checked_in:
                 continue
 
-            guest_name = reservation.guest_names[0]
-            guest = self._get_reservation_guest(reservation.reservation_id, guest_name)
+            guest = self._get_reservation_guest(reservation.reservation_id, reservation.guest_names[0])
             room = reservation.room
-
-            room_charge = reservation.expected_daily_rate
+            room_charge = round(reservation.expected_daily_rate, 2)
             tax_amount = round(room_charge * tax_rate, 2)
             total_due = round(room_charge + tax_amount, 2)
 
@@ -248,6 +260,7 @@ class HotelAssistant:
             reservation.status = "no_show"
             room.occupancy_status = "available"
             room.current_guest = None
+            room.current_guests = []
             room.vehicle = None
 
             processed.append({
