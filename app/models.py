@@ -78,6 +78,7 @@ class Reservation:
         self.special_requests = special_requests
         self.status = "confirmed"
         self.checked_in = False
+        self.checked_in_guest_names = []
         self.checked_out = False
 
     def calculate_length_of_stay(self):
