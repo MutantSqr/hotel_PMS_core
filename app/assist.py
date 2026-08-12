@@ -19,7 +19,10 @@ class HotelAssistant:
         self.rooms[room.room_number] = room
 
     def _reservation_dates_overlap(self, first, second):
-        return first.check_in_date < second.check_out_date and first.check_out_date > second.check_in_date
+        return (
+            first.check_in_date < second.check_out_date
+            and first.check_out_date > second.check_in_date
+        )
 
     def _room_has_future_reservation(self, room_number, excluding_reservation_id=None):
         now = datetime.now()
@@ -75,16 +78,21 @@ class HotelAssistant:
     def cancel_reservation(self, reservation_id):
         if reservation_id not in self.reservations:
             raise ValueError(f"Error: Reservation {reservation_id} not found")
+
         reservation = self.reservations[reservation_id]
         if reservation.status != "confirmed" or reservation.checked_in or reservation.checked_out:
             raise ValueError(
                 f"Error: Reservation {reservation_id} cannot be cancelled from status '{reservation.status}'"
             )
+
         reservation.status = "cancelled"
         room = self.rooms[reservation.room.room_number]
-        has_future_reservation = self._room_has_future_reservation(room.room_number, excluding_reservation_id=reservation_id)
+        has_future_reservation = self._room_has_future_reservation(
+            room.room_number, excluding_reservation_id=reservation_id
+        )
         if not has_future_reservation and room.occupancy_status != "occupied":
             room.occupancy_status = "available"
+
         return {
             "status": "success",
             "message": f"Reservation {reservation_id} cancelled",
@@ -102,7 +110,8 @@ class HotelAssistant:
         confirmation_number = self._reservation_guest_map[reservation_id][guest_name]
         return self.guests[confirmation_number]
 
-    def _create_billing(self, guest, room, reservation, amount_due, tax_amount=0, payment_method="Pending"):
+    def _create_billing(self, guest, room, reservation, amount_due, tax_amount=0,
+                        payment_method="Pending"):
         billing_id = f"BILL{self.billing_counter + 1:04d}"
         billing = Billing(
             billing_id=billing_id,
@@ -175,6 +184,9 @@ class HotelAssistant:
             if name not in self._reservation_guest_map[reservation_id]:
                 raise ValueError(f"Error: Guest '{name}' is not registered in the system")
 
+        # A room already occupied by this same reservation is valid for a later
+        # registered guest arriving separately. Only a different reservation
+        # may block the room at this point.
         if not checked_in_names and room.occupancy_status == "occupied":
             raise ValueError(f"Error: Room {room_number} is currently occupied")
 
@@ -318,6 +330,7 @@ class HotelAssistant:
             room_charge = round(reservation.expected_daily_rate, 2)
             tax_amount = round(room_charge * tax_rate, 2)
             total_due = round(room_charge + tax_amount, 2)
+
             billing = self._create_billing(
                 guest=guest,
                 room=room,
@@ -328,7 +341,6 @@ class HotelAssistant:
             )
 
             reservation.status = "no_show"
-            reservation.checked_in_guest_names = []
             room.occupancy_status = "available"
             room.current_guest = None
             room.current_guests = []
