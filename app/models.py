@@ -71,6 +71,7 @@ class Reservation:
         self.room = room
         self.expected_daily_rate = expected_daily_rate
         self.special_requests = special_requests
+        self.status = "confirmed"
         self.checked_in = False
         self.checked_out = False
 
@@ -102,16 +103,10 @@ class Vehicle:
 
 
 class Billing:
-    """
-    FIX: balance is now a derived @property instead of a stored value the
-    caller had to compute and pass in. It is mathematically impossible for
-    it to drift out of sync with amount_due / amount_paid now, which is what
-    the README's "auto-calculated ledger balances" claim was actually
-    supposed to mean.
-    """
+    """Billing ledger with a derived balance."""
 
     def __init__(self, billing_id, guest, room, reservation, amount_due, amount_paid, billing_date,
-                 payment_method):
+                 payment_method, tax_amount=0):
         if not billing_id or not billing_id.strip():
             raise ValueError("Error: Billing ID cannot be empty")
         if guest is None:
@@ -122,6 +117,8 @@ class Billing:
             raise ValueError("Error: Amount due cannot be negative")
         if amount_paid < 0:
             raise ValueError("Error: Amount paid cannot be negative")
+        if tax_amount < 0:
+            raise ValueError("Error: Tax amount cannot be negative")
         if not payment_method or not payment_method.strip():
             raise ValueError("Error: Payment method cannot be empty")
 
@@ -131,6 +128,7 @@ class Billing:
         self.reservation = reservation
         self.amount_due = amount_due
         self._amount_paid = amount_paid
+        self.tax_amount = tax_amount
         self.billing_date = billing_date
         self.payment_method = payment_method
 
