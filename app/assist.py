@@ -10,18 +10,8 @@ class HotelAssistant:
         self.vehicles = {}
         self.billing_records = {}
         self.billing_counter = 0
-        # FIX: per-reservation name -> confirmation_number map, built once at
-        # add_reservation time. This replaces the old global "search every
-        # guest in the hotel by name" lookup used inside check_in/check_out,
-        # which could silently grab the wrong guest if two people shared a
-        # name anywhere in the system.
+        self.pm_accounts = {}
         self._reservation_guest_map = {}
-
-    # -----------------------------------------------------------------
-    # Registry methods
-    # FIX: all three now reject duplicate keys instead of silently
-    # overwriting existing rooms / reservations / guests.
-    # -----------------------------------------------------------------
 
     def add_room(self, room):
         if room.room_number in self.rooms:
@@ -32,11 +22,22 @@ class HotelAssistant:
         if reservation.reservation_id in self.reservations:
             raise ValueError(f"Error: Reservation {reservation.reservation_id} already exists")
 
-        # FIX: resolve every guest_name on this reservation to an actual
-        # registered Guest right now, at reservation-creation time, instead
-        # of waiting until check-in and hoping a name-based search finds the
-        # right person. Ambiguous or missing guests fail loudly, here,
-        # before the reservation is accepted.
+        room = reservation.room
+        if room.room_number not in self.rooms:
+            raise ValueError(f"Error: Room {room.room_number} is not registered in the system")
+
+        if room.out_of_order:
+            raise ValueError(f"Error: Room {room.room_number} is out of order and cannot be reserved")
+
+        if room.occupancy_status != "available":
+            raise ValueError(f"Error: Room {room.room_number} is unavailable for reservation")
+
+        # One active reservation per room. A checked-out reservation remains
+        # in the history, but it no longer blocks the room.
+        for existing in self.reservations.values():
+            if existing.room.room_number == room.room_number and not existing.checked_out:
+                raise ValueError(f"Error: Room {room.room_number} already has an active reservation")
+
         guest_map = {}
         for name in reservation.guest_names:
             matches = [g for g in self.guests.values() if g.name == name]
@@ -49,26 +50,17 @@ class HotelAssistant:
                 )
             guest_map[name] = matches[0].confirmation_number
 
+        # All validation happens before either registry or room state changes.
         self.reservations[reservation.reservation_id] = reservation
         self._reservation_guest_map[reservation.reservation_id] = guest_map
-
-        # FIX: this was the core bug. Nothing previously moved a room into
-        # "reserved" status, so check_in_guest's requirement that the room
-        # already be "reserved" could never be satisfied.
-        if reservation.room.out_of_order:
-            raise ValueError(f"Error: Room {reservation.room.room_number} is out of order and cannot be reserved")
-        reservation.room.occupancy_status = "reserved"
+        room.occupancy_status = "reserved"
 
     def add_guest(self, guest):
         if guest.confirmation_number in self.guests:
             raise ValueError(f"Error: Guest with confirmation {guest.confirmation_number} already exists")
         self.guests[guest.confirmation_number] = guest
 
-    # -----------------------------------------------------------------
-    # Check-in / Check-out
-    # -----------------------------------------------------------------
-
-    def check_in_guest(self, reservation_id, guest_name, vehicle=None):
+    def check_in_guest(self, reservation_id, guest_name, vehicle=None, accompanying_guest_names=None):
         if reservation_id not in self.reservations:
             raise ValueError(f"Error: Reservation {reservation_id} not found")
 
@@ -77,8 +69,6 @@ class HotelAssistant:
         if guest_name not in reservation.guest_names:
             raise ValueError(f"Error: Guest '{guest_name}' is not part of reservation {reservation_id}")
 
-        # FIX: added guard. Previously nothing stopped the same reservation
-        # from being checked in twice.
         if reservation.checked_in:
             raise ValueError(f"Error: Reservation {reservation_id} has already been checked in")
 
@@ -94,8 +84,21 @@ class HotelAssistant:
         if room.out_of_order:
             raise ValueError(f"Error: Room {room_number} is out of order")
 
-        # FIX: O(1) lookup via the map built in add_reservation, instead of
-        # scanning every guest in the hotel by name.
+        accompanying_guest_names = accompanying_guest_names or []
+        check_in_names = [guest_name] + accompanying_guest_names
+
+        if len(check_in_names) > room.capacity:
+            raise ValueError(f"Error: Room {room_number} can accommodate only {room.capacity} guests")
+
+        if len(set(check_in_names)) != len(check_in_names):
+            raise ValueError("Error: A guest cannot be checked in more than once")
+
+        for name in check_in_names:
+            if name not in reservation.guest_names:
+                raise ValueError(f"Error: Guest '{name}' is not part of reservation {reservation_id}")
+            if name not in self._reservation_guest_map[reservation_id]:
+                raise ValueError(f"Error: Guest '{name}' is not registered in the system")
+
         confirmation_number = self._reservation_guest_map[reservation_id][guest_name]
         guest = self.guests[confirmation_number]
 
@@ -115,6 +118,7 @@ class HotelAssistant:
 
         room.occupancy_status = "occupied"
         room.current_guest = guest_name
+        room.current_guests = check_in_names
 
         if vehicle:
             room.vehicle = vehicle
@@ -130,10 +134,12 @@ class HotelAssistant:
             "room_number": room_number,
             "billing_id": billing_id,
             "amount_due": total_bill,
-            "vehicle": vehicle.vehicle_id if vehicle else "None"
+            "vehicle": vehicle.vehicle_id if vehicle else "None",
+            "guests": check_in_names
         }
 
-    def check_out_guest(self, reservation_id, guest_name, amount_paid=0):
+    def check_out_guest(self, reservation_id, guest_name, amount_paid=0,
+                        night_audit=False, transfer_to_pm=False):
         if reservation_id not in self.reservations:
             raise ValueError(f"Error: Reservation {reservation_id} not found")
 
@@ -145,14 +151,14 @@ class HotelAssistant:
         if not reservation.checked_in:
             raise ValueError(f"Error: Guest '{guest_name}' has not checked in yet")
 
-        # FIX: added guard. Previously nothing stopped a reservation from
-        # being checked out twice, which would double-clear the vehicle
-        # and re-flip an already-available room.
         if reservation.checked_out:
             raise ValueError(f"Error: Guest '{guest_name}' has already been checked out")
 
         if amount_paid < 0:
             raise ValueError("Error: Amount paid cannot be negative")
+
+        if night_audit and transfer_to_pm:
+            raise ValueError("Error: A bill cannot be settled by night audit and transferred to a PM account at the same time")
 
         room_number = reservation.room.room_number
         if room_number not in self.rooms:
@@ -163,8 +169,6 @@ class HotelAssistant:
         if room.current_guest != guest_name:
             raise ValueError(f"Error: Guest '{guest_name}' is not currently in room {room_number}")
 
-        # FIX: match the billing record by confirmation number rather than
-        # by name, using the same resolved map from add_reservation.
         confirmation_number = self._reservation_guest_map[reservation_id][guest_name]
         billing_record = next(
             (b for b in self.billing_records.values()
@@ -176,23 +180,34 @@ class HotelAssistant:
         if billing_record is None:
             raise ValueError(f"Error: No billing record found for reservation {reservation_id}")
 
+        # Validate payment and outstanding-balance rules before changing room
+        # or reservation state. Overpayment is allowed and becomes a credit.
+        billing_record.amount_paid = amount_paid
+        balance = billing_record.balance
+
+        if balance > 0 and not night_audit and not transfer_to_pm:
+            raise ValueError(
+                f"Error: Outstanding balance of {balance:.2f} requires night audit settlement or PM account transfer"
+            )
+
+        if night_audit and balance > 0:
+            billing_record.amount_paid = billing_record.amount_due
+            billing_record.payment_method = "Night Audit Settlement"
+        elif transfer_to_pm and balance > 0:
+            billing_record.transfer_to_pm_account()
+            self.pm_accounts[billing_record.billing_id] = billing_record.balance
+        elif amount_paid > 0:
+            billing_record.payment_method = "Paid"
+
         vehicle_removed = None
         if room.vehicle:
             vehicle_removed = room.vehicle.vehicle_id
-
-        # amount_paid is now a validated property on Billing itself; balance
-        # is derived automatically and can no longer be set directly.
-        billing_record.amount_paid = amount_paid
-
-        if amount_paid > 0:
-            billing_record.payment_method = "Paid"
-
-        if vehicle_removed:
             del self.vehicles[vehicle_removed]
             room.vehicle = None
 
         room.occupancy_status = "available"
         room.current_guest = None
+        room.current_guests = []
         reservation.checked_out = True
 
         return {
@@ -201,7 +216,9 @@ class HotelAssistant:
             "room_number": room_number,
             "billing_id": billing_record.billing_id,
             "amount_due": billing_record.amount_due,
-            "amount_paid": amount_paid,
+            "amount_paid": billing_record.amount_paid,
             "balance": billing_record.balance,
+            "credit": billing_record.credit,
+            "pm_account": billing_record.pm_account,
             "vehicle_removed": vehicle_removed if vehicle_removed else "None"
         }
