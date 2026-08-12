@@ -43,14 +43,18 @@ class NightlyPostingService:
             raise ValueError("Error: Reservation and folio are required")
         if not isinstance(audit_datetime, datetime):
             raise ValueError("Error: Audit timestamp is required")
-        if reservation.status != "checked_in" or not getattr(reservation, "checked_in", False):
+        is_checked_in = reservation.status == "checked_in" or (
+            reservation.status == "confirmed" and getattr(reservation, "checked_in", False)
+        )
+        if not is_checked_in:
             raise ValueError("Error: Only checked-in reservations can receive nightly charges")
 
         stay_date = cls._stay_date(reservation)
+        departure_date = reservation.check_out_date.date()
         if audit_datetime.date() < stay_date:
             raise ValueError("Error: Cannot post a room night before arrival")
-        if audit_datetime.date() >= reservation.check_out_date.date():
-            raise ValueError("Error: Cannot post a room night on or after departure")
+        if audit_datetime.date() > departure_date:
+            raise ValueError("Error: Cannot post a room night after departure")
 
         room_charge = money(reservation.expected_daily_rate)
         tax_charge = tax_for(room_charge, tax_rate)
