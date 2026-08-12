@@ -8,44 +8,16 @@ from app.models import Guest, Reservation, Room, Vehicle
 
 def make_system(guest_names=None, rate=450.0, days=2, capacity=4, room_number=1501):
     assistant = HotelAssistant()
-    room = Room(
-        room_number,
-        15,
-        capacity,
-        ["King Bed", "Ocean View"],
-        "presidential",
-        "available",
-        False,
-        "",
-        False,
-    )
-
+    room = Room(room_number, 15, capacity, ["King Bed", "Ocean View"], "presidential", "available", False, "", False)
     guest_names = guest_names or ["Rondrick Bowser"]
     guests = []
     for index, name in enumerate(guest_names, start=1):
-        guest = Guest(
-            name,
-            f"guest{index}@example.com",
-            "Visa ending 4242",
-            "Vanguard Fleet",
-            "High floor",
-            f"CONF{index:03d}",
-        )
+        guest = Guest(name, f"guest{index}@example.com", "Visa ending 4242", "Vanguard Fleet", "High floor", f"CONF{index:03d}")
         assistant.add_guest(guest)
         guests.append(guest)
-
     check_in_date = datetime(2026, 8, 11, 15, 0)
     check_out_date = check_in_date + timedelta(days=days)
-    reservation = Reservation(
-        "RES999",
-        guest_names,
-        check_in_date,
-        check_out_date,
-        room,
-        rate,
-        "Extra Towels",
-    )
-
+    reservation = Reservation("RES999", guest_names, check_in_date, check_out_date, room, rate, "Extra Towels")
     assistant.add_room(room)
     assistant.add_reservation(reservation)
     return assistant, room, guests, reservation
@@ -254,22 +226,20 @@ def test_check_in_allows_multiple_registered_guests_within_capacity():
 
 
 def test_multiple_guest_check_in_rejects_capacity_overflow():
-    assistant, room, guests, reservation = make_system(guest_names=["A", "B", "C", "D", "E"], capacity=4)
+    assistant, room, guests, reservation = make_system(guest_names=["A", "B", "C", "D"], capacity=4)
     with pytest.raises(ValueError, match="accommodate only 4"):
-        assistant.check_in_guest(reservation.reservation_id, guests[0].name, accompanying_guest_names=guests[1:])
+        assistant.check_in_guest(reservation.reservation_id, guests[0].name, accompanying_guest_names=guests[1:] + ["Unauthorized Fifth Guest"])
 
 
 def test_corrupt_available_room_cannot_hide_another_checked_in_reservation():
     assistant, room, guests, reservation = make_system()
     assistant.check_in_guest(reservation.reservation_id, guests[0].name)
     room.occupancy_status = "available"
-
     future_guest = Guest("Future Guest", "future@example.com", "Visa ending 7777", "", "", "CONF002")
     assistant.add_guest(future_guest)
     future = Reservation("CORRUPT2", [future_guest.name], datetime(2026, 8, 11, 15, 30), datetime(2026, 8, 12, 15, 30), room, 500.0, "")
     assistant.reservations[future.reservation_id] = future
     assistant._reservation_guest_map[future.reservation_id] = {future_guest.name: future_guest.confirmation_number}
-
     with pytest.raises(ValueError, match="already occupied"):
         assistant.check_in_guest(future.reservation_id, future_guest.name, current_datetime=datetime(2026, 8, 11, 16, 0))
 
