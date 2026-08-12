@@ -1,139 +1,250 @@
-from datetime import datetime
-from app.models import Billing
+from datetime import datetime, timedelta
+
+import pytest
+
+from app.assist import HotelAssistant
+from app.models import Guest, Reservation, Room, Vehicle
 
 
-class HotelAssistant:
-    def __init__(self):
-        self.reservations = {}
-        self.rooms = {}
-        self.guests = {}
-        self.vehicles = {}
-        self.billing_records = {}
-        self.billing_counter = 0
+def make_system(guest_names=None, rate=450.0, days=2, capacity=4):
+    assistant = HotelAssistant()
+    room = Room(
+        1501,
+        15,
+        capacity,
+        ["King Bed", "Ocean View"],
+        "presidential",
+        "available",
+        False,
+        "",
+        False,
+    )
 
-    def add_room(self, room):
-        self.rooms[room.room_number] = room
+    guest_names = guest_names or ["Rondrick Bowser"]
+    guests = []
+    for index, name in enumerate(guest_names, start=1):
+        guest = Guest(
+            name,
+            f"guest{index}@example.com",
+            "Visa ending 4242",
+            "Vanguard Fleet",
+            "High floor",
+            f"CONF{index:03d}",
+        )
+        assistant.add_guest(guest)
+        guests.append(guest)
 
-    def add_reservation(self, reservation):
-        self.reservations[reservation.reservation_id] = reservation
+    check_in_date = datetime(2026, 8, 11, 15, 0)
+    check_out_date = check_in_date + timedelta(days=days)
+    reservation = Reservation(
+        "RES999",
+        guest_names,
+        check_in_date,
+        check_out_date,
+        room,
+        rate,
+        "Extra Towels",
+    )
 
-    def add_guest(self, guest):
-        self.guests[guest.confirmation_number] = guest
+    assistant.add_room(room)
+    assistant.add_reservation(reservation)
+    return assistant, room, guests, reservation
 
-    def check_in_guest(self, reservation_id, guest_name, vehicle=None):
-        if reservation_id not in self.reservations:
-            raise ValueError(f"Error: Reservation {reservation_id} not found")
 
-        reservation = self.reservations[reservation_id]
+def test_normal_reservation_check_in_and_checkout():
+    assistant, room, guests, reservation = make_system()
 
-        if guest_name not in reservation.guest_names:
-            raise ValueError(f"Error: Guest '{guest_name}' is not part of reservation {reservation_id}")
+    assert room.occupancy_status == "reserved"
 
-        room_number = reservation.room.room_number
-        if room_number not in self.rooms:
-            raise ValueError(f"Error: Room {room_number} not found")
+    result = assistant.check_in_guest(reservation.reservation_id, guests[0].name)
 
-        room = self.rooms[room_number]
+    assert result["status"] == "success"
+    assert room.occupancy_status == "occupied"
+    assert room.current_guest == guests[0].name
+    assert room.current_guests == [guests[0].name]
+    assert reservation.checked_in is True
+    assert result["amount_due"] == 900.0
 
-        if room.occupancy_status != "reserved":
-            raise ValueError(f"Error: Room {room_number} is not reserved for this guest")
+    result = assistant.check_out_guest(reservation.reservation_id, guests[0].name, 900.0)
 
-        if room.out_of_order:
-            raise ValueError(f"Error: Room {room_number} is out of order")
+    assert result["status"] == "success"
+    assert result["balance"] == 0
+    assert room.occupancy_status == "available"
+    assert room.current_guest is None
+    assert reservation.checked_out is True
 
-        room.occupancy_status = "occupied"
-        room.current_guest = guest_name
 
-        if vehicle:
-            room.vehicle = vehicle
-            self.vehicles[vehicle.vehicle_id] = vehicle
+def test_two_reservations_cannot_claim_same_room():
+    assistant, room, guests, reservation = make_system()
 
-        reservation.checked_in = True
+    second_reservation = Reservation(
+        "RES1000",
+        [guests[0].name],
+        datetime(2026, 8, 12, 15, 0),
+        datetime(2026, 8, 14, 15, 0),
+        room,
+        500.0,
+        "",
+    )
 
-        total_bill = reservation.calculate_total_expected_bill()
-        self.billing_counter += 1
-        billing_id = f"BILL{self.billing_counter:04d}"
+    with pytest.raises(ValueError, match="unavailable|active reservation"):
+        assistant.add_reservation(second_reservation)
 
-        guest = next((g for g in self.guests.values() if g.name == guest_name), None)
-        if guest is None:
-            raise ValueError(f"Error: Guest '{guest_name}' not found in system")
+    assert list(assistant.reservations) == ["RES999"]
+    assert room.occupancy_status == "reserved"
 
-        billing = Billing(
-            billing_id=billing_id,
-            guest=guest,
-            room=room,
-            reservation=reservation,
-            amount_due=total_bill,
-            amount_paid=0,
-            balance=total_bill,
-            billing_date=datetime.now(),
-            payment_method="Pending"
+
+def test_out_of_order_reservation_does_not_change_state():
+    assistant = HotelAssistant()
+    room = Room(1502, 15, 2, [], "presidential", "available", True, "Maintenance", False)
+    guest = Guest("Guest One", "one@example.com", "Visa", "", "", "CONF001")
+    assistant.add_room(room)
+    assistant.add_guest(guest)
+
+    reservation = Reservation(
+        "RES1001",
+        [guest.name],
+        datetime(2026, 8, 11, 15, 0),
+        datetime(2026, 8, 12, 15, 0),
+        room,
+        300.0,
+        "",
+    )
+
+    with pytest.raises(ValueError, match="out of order"):
+        assistant.add_reservation(reservation)
+
+    assert "RES1001" not in assistant.reservations
+    assert room.occupancy_status == "available"
+
+
+def test_accompanying_guests_can_check_in_on_one_reservation():
+    assistant, room, guests, reservation = make_system(
+        guest_names=["Primary Guest", "Accompanying Guest"]
+    )
+
+    result = assistant.check_in_guest(
+        reservation.reservation_id,
+        guests[0].name,
+        accompanying_guest_names=[guests[1].name],
+    )
+
+    assert result["guests"] == [guests[0].name, guests[1].name]
+    assert room.current_guest == guests[0].name
+    assert room.current_guests == [guests[0].name, guests[1].name]
+
+
+def test_room_capacity_rejects_too_many_guests():
+    with pytest.raises(ValueError, match="can accommodate only"):
+        make_system(
+            guest_names=["One", "Two", "Three"],
+            capacity=2,
         )
 
-        self.billing_records[billing_id] = billing
 
-        return {
-            "status": "success",
-            "message": f"Guest {guest_name} checked in to room {room_number}",
-            "room_number": room_number,
-            "billing_id": billing_id,
-            "amount_due": total_bill,
-            "vehicle": vehicle.vehicle_id if vehicle else "None"
-        }
+def test_fractional_stay_and_fractional_rate():
+    assistant, room, guests, reservation = make_system(rate=125.50, days=1.5)
 
-    def check_out_guest(self, reservation_id, guest_name, amount_paid=0):
-        if reservation_id not in self.reservations:
-            raise ValueError(f"Error: Reservation {reservation_id} not found")
+    assert reservation.calculate_length_of_stay() == 1.5
+    assert reservation.calculate_total_expected_bill() == 188.25
 
-        reservation = self.reservations[reservation_id]
+    result = assistant.check_in_guest(reservation.reservation_id, guests[0].name)
+    assert result["amount_due"] == 188.25
 
-        if guest_name not in reservation.guest_names:
-            raise ValueError(f"Error: Guest '{guest_name}' is not part of reservation {reservation_id}")
 
-        if not reservation.checked_in:
-            raise ValueError(f"Error: Guest '{guest_name}' has not checked in yet")
+def test_partial_balance_cannot_checkout_without_night_audit_or_pm_account():
+    assistant, room, guests, reservation = make_system()
+    assistant.check_in_guest(reservation.reservation_id, guests[0].name)
 
-        room_number = reservation.room.room_number
-        if room_number not in self.rooms:
-            raise ValueError(f"Error: Room {room_number} not found")
+    with pytest.raises(ValueError, match="Outstanding balance"):
+        assistant.check_out_guest(reservation.reservation_id, guests[0].name, 600.0)
 
-        room = self.rooms[room_number]
+    assert room.occupancy_status == "occupied"
+    assert reservation.checked_out is False
 
-        if room.current_guest != guest_name:
-            raise ValueError(f"Error: Guest '{guest_name}' is not currently in room {room_number}")
 
-        vehicle_removed = None
-        if room.vehicle:
-            vehicle_removed = room.vehicle.vehicle_id
-            del self.vehicles[room.vehicle.vehicle_id]
-            room.vehicle = None
+def test_night_audit_can_settle_remaining_balance():
+    assistant, room, guests, reservation = make_system()
+    assistant.check_in_guest(reservation.reservation_id, guests[0].name)
 
-        room.occupancy_status = "available"
-        room.current_guest = None
-        reservation.checked_out = True
+    result = assistant.check_out_guest(
+        reservation.reservation_id,
+        guests[0].name,
+        amount_paid=600.0,
+        night_audit=True,
+    )
 
-        billing_record = next(
-            (b for b in self.billing_records.values()
-             if b.reservation.reservation_id == reservation_id and b.guest.name == guest_name),
-            None
-        )
+    assert result["balance"] == 0
+    assert result["amount_paid"] == 900.0
+    assert result["pm_account"] is False
+    assert room.occupancy_status == "available"
 
-        if billing_record is None:
-            raise ValueError(f"Error: No billing record found for reservation {reservation_id}")
 
-        billing_record.amount_paid = amount_paid
-        billing_record.balance = billing_record.amount_due - amount_paid
+def test_outstanding_balance_can_transfer_to_pm_account():
+    assistant, room, guests, reservation = make_system()
+    assistant.check_in_guest(reservation.reservation_id, guests[0].name)
 
-        if amount_paid > 0:
-            billing_record.payment_method = "Paid"
+    result = assistant.check_out_guest(
+        reservation.reservation_id,
+        guests[0].name,
+        amount_paid=600.0,
+        transfer_to_pm=True,
+    )
 
-        return {
-            "status": "success",
-            "message": f"Guest {guest_name} checked out from room {room_number}",
-            "room_number": room_number,
-            "billing_id": billing_record.billing_id,
-            "amount_due": billing_record.amount_due,
-            "amount_paid": amount_paid,
-            "balance": billing_record.balance,
-            "vehicle_removed": vehicle_removed if vehicle_removed else "None"
-        }
+    assert result["balance"] == 300.0
+    assert result["pm_account"] is True
+    assert assistant.pm_accounts[result["billing_id"]] == 300.0
+    assert room.occupancy_status == "available"
+
+
+def test_overpayment_creates_credit_and_allows_checkout():
+    assistant, room, guests, reservation = make_system()
+    assistant.check_in_guest(reservation.reservation_id, guests[0].name)
+
+    result = assistant.check_out_guest(reservation.reservation_id, guests[0].name, 1000.0)
+
+    assert result["balance"] == -100.0
+    assert result["credit"] == 100.0
+    assert room.occupancy_status == "available"
+
+
+def test_duplicate_check_in_is_rejected():
+    assistant, room, guests, reservation = make_system()
+    assistant.check_in_guest(reservation.reservation_id, guests[0].name)
+
+    with pytest.raises(ValueError, match="already been checked in"):
+        assistant.check_in_guest(reservation.reservation_id, guests[0].name)
+
+
+def test_duplicate_checkout_is_rejected():
+    assistant, room, guests, reservation = make_system()
+    assistant.check_in_guest(reservation.reservation_id, guests[0].name)
+    assistant.check_out_guest(reservation.reservation_id, guests[0].name, 900.0)
+
+    with pytest.raises(ValueError, match="already been checked out"):
+        assistant.check_out_guest(reservation.reservation_id, guests[0].name, 900.0)
+
+
+def test_vehicle_is_registered_and_removed_on_checkout():
+    assistant, room, guests, reservation = make_system()
+    vehicle = Vehicle(
+        "VEH01",
+        "TX-8890",
+        "Buick",
+        "Enclave",
+        "Black",
+        guests[0].name,
+        room,
+        reservation,
+    )
+
+    assistant.check_in_guest(reservation.reservation_id, guests[0].name, vehicle=vehicle)
+
+    assert "VEH01" in assistant.vehicles
+    assert room.vehicle is vehicle
+
+    result = assistant.check_out_guest(reservation.reservation_id, guests[0].name, 900.0)
+
+    assert "VEH01" not in assistant.vehicles
+    assert room.vehicle is None
+    assert result["vehicle_removed"] == "VEH01"
