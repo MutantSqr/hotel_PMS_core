@@ -12,8 +12,8 @@ def make_pms():
     room2 = Room(1502, 15, 2, [], "standard", "available", False, None, False)
     pms.add_room(room1)
     pms.add_room(room2)
-    pms.add_guest(Guest("Alice", "G001"))
-    pms.add_guest(Guest("Bob", "G002"))
+    pms.add_guest(Guest("Alice", "contact", "", "", "", "G001"))
+    pms.add_guest(Guest("Bob", "contact", "", "", "", "G002"))
     return pms, room1, room2
 
 
