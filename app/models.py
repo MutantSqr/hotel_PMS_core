@@ -47,6 +47,7 @@ class Room:
         self.out_of_order_reason = out_of_order_reason
         self.showroom = showroom
         self.current_guest = None
+        self.current_guests = []
         self.vehicle = None
 
 
@@ -57,12 +58,16 @@ class Reservation:
             raise ValueError("Error: Reservation ID cannot be empty")
         if not guest_names or len(guest_names) == 0:
             raise ValueError("Error: At least one guest name is required")
+        if len(set(guest_names)) != len(guest_names):
+            raise ValueError("Error: A guest cannot be listed more than once on the same reservation")
         if check_in_date >= check_out_date:
             raise ValueError("Error: Check-out date must be after check-in date")
         if expected_daily_rate <= 0:
             raise ValueError("Error: Expected daily rate must be positive")
         if room is None:
             raise ValueError("Error: Reservation must be linked to a room")
+        if len(guest_names) > room.capacity:
+            raise ValueError(f"Error: Room {room.room_number} can accommodate only {room.capacity} guests")
 
         self.reservation_id = reservation_id
         self.guest_names = guest_names
@@ -76,10 +81,10 @@ class Reservation:
         self.checked_out = False
 
     def calculate_length_of_stay(self):
-        return (self.check_out_date - self.check_in_date).days
+        return (self.check_out_date - self.check_in_date).total_seconds() / 86400
 
     def calculate_total_expected_bill(self):
-        return self.calculate_length_of_stay() * self.expected_daily_rate
+        return round(self.calculate_length_of_stay() * self.expected_daily_rate, 2)
 
 
 class Vehicle:
@@ -103,10 +108,10 @@ class Vehicle:
 
 
 class Billing:
-    """Billing ledger with a derived balance."""
+    """Billing ledger with derived balance and credit."""
 
     def __init__(self, billing_id, guest, room, reservation, amount_due, amount_paid, billing_date,
-                 payment_method, tax_amount=0):
+                 payment_method, tax_amount=0, pm_account=False):
         if not billing_id or not billing_id.strip():
             raise ValueError("Error: Billing ID cannot be empty")
         if guest is None:
@@ -126,11 +131,12 @@ class Billing:
         self.guest = guest
         self.room = room
         self.reservation = reservation
-        self.amount_due = amount_due
-        self._amount_paid = amount_paid
-        self.tax_amount = tax_amount
+        self.amount_due = round(amount_due, 2)
+        self._amount_paid = round(amount_paid, 2)
+        self.tax_amount = round(tax_amount, 2)
         self.billing_date = billing_date
         self.payment_method = payment_method
+        self.pm_account = pm_account
 
     @property
     def amount_paid(self):
@@ -140,8 +146,21 @@ class Billing:
     def amount_paid(self, value):
         if value < 0:
             raise ValueError("Error: Amount paid cannot be negative")
-        self._amount_paid = value
+        self._amount_paid = round(value, 2)
 
     @property
     def balance(self):
-        return self.amount_due - self._amount_paid
+        return round(self.amount_due - self._amount_paid, 2)
+
+    @property
+    def credit(self):
+        return round(max(0, -self.balance), 2)
+
+    def apply_credit(self, credit):
+        if credit < 0:
+            raise ValueError("Error: Credit cannot be negative")
+        self._amount_paid = round(self._amount_paid + credit, 2)
+
+    def transfer_to_pm_account(self):
+        self.pm_account = True
+        self.payment_method = "PM Account"
