@@ -12,3 +12,7 @@ def test_demo_runs_from_check_in_through_night_audit_and_checkout():
     assert result["folio"]["total_payments"] == Decimal("162.38")
     assert result["folio"]["balance"] == Decimal("0.00")
     assert result["check_out"]["status"] == "success"
+
+    # The demo must exercise the real in-house lifecycle state used by
+    # NightlyPostingService, rather than relying on an incompatible flag pair.
+    assert result["check_in"]["reservation_status"] == "checked_in"
