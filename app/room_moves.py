@@ -1,37 +1,70 @@
-"""Room-move domain rules.
+"""Reservation room-move rules.
 
-This module is intentionally small: it validates a proposed room move without
-mutating the PMS. The service layer should call ``validate_room_move`` before
-changing the reservation's room assignment.
+The validator performs every check before mutating reservation or room state.
 """
 
 
-def validate_room_move(pms, reservation, destination_room_number):
-    if reservation.status in {"checked_in", "checked_out", "no_show", "cancelled"}:
-        if reservation.status == "checked_in":
-            raise ValueError("Cannot move a checked in reservation")
-        raise ValueError("Cannot move an inactive reservation")
+def change_room(self, reservation_id, destination_room_number):
+    if reservation_id not in self.reservations:
+        raise ValueError(f"Error: Reservation {reservation_id} not found")
 
-    destination = pms.rooms.get(destination_room_number)
+    reservation = self.reservations[reservation_id]
+    if reservation.checked_out:
+        raise ValueError(f"Error: Reservation {reservation_id} has already been checked out")
+    if reservation.status == "checked_in" or reservation.checked_in:
+        raise ValueError(f"Error: Reservation {reservation_id} is checked in and cannot be moved")
+    if reservation.status in {"cancelled", "no_show"}:
+        raise ValueError(f"Error: Reservation {reservation_id} is not active")
+
+    destination = self.rooms.get(destination_room_number)
     if destination is None:
-        raise ValueError(f"Room {destination_room_number} does not exist")
+        raise ValueError(f"Error: Room {destination_room_number} not found")
+    if destination.out_of_order:
+        raise ValueError(f"Error: Room {destination_room_number} is out of order")
+    if len(reservation.guest_names) > destination.capacity:
+        raise ValueError(
+            f"Error: Room {destination_room_number} can accommodate only {destination.capacity} guests"
+        )
 
-    if getattr(destination, "status", None) == "out_of_order":
-        raise ValueError(f"Room {destination_room_number} is out of order")
-
-    guest_count = len(getattr(reservation, "guests", []))
-    capacity = getattr(destination, "capacity", 0)
-    if guest_count > capacity:
-        raise ValueError(f"Room {destination_room_number} capacity is insufficient")
-
-    for other in pms.reservations.values():
-        if other.reservation_id == reservation.reservation_id:
+    for existing in self.reservations.values():
+        if existing.reservation_id == reservation_id:
             continue
-        if other.room_number != destination_room_number:
+        if existing.room.room_number != destination_room_number:
             continue
-        if getattr(other, "status", None) in {"cancelled", "no_show", "checked_out"}:
+        if existing.status in {"cancelled", "no_show", "checked_out"}:
             continue
-        if reservation.check_in < other.check_out and other.check_in < reservation.check_out:
-            raise ValueError(f"Room {destination_room_number} is already reserved")
+        if self._reservation_dates_overlap(existing, reservation):
+            raise ValueError(
+                f"Error: Room {destination_room_number} is already reserved "
+                f"from {existing.check_in_date} to {existing.check_out_date} "
+                f"by reservation {existing.reservation_id}"
+            )
 
-    return destination
+    old_room = reservation.room
+    if old_room.room_number == destination_room_number:
+        return {
+            "status": "success",
+            "message": f"Reservation {reservation_id} is already assigned to room {destination_room_number}",
+            "reservation_id": reservation_id,
+            "old_room": old_room.room_number,
+            "new_room": destination_room_number,
+        }
+
+    # All validation has completed. Mutation starts only here.
+    reservation.room = destination
+    if old_room.occupancy_status == "reserved":
+        old_room.occupancy_status = "available"
+    if destination.occupancy_status != "occupied":
+        destination.occupancy_status = "reserved"
+
+    for billing in self.billing_records.values():
+        if billing.reservation.reservation_id == reservation_id:
+            billing.room = destination
+
+    return {
+        "status": "success",
+        "message": f"Reservation {reservation_id} moved from room {old_room.room_number} to room {destination_room_number}",
+        "reservation_id": reservation_id,
+        "old_room": old_room.room_number,
+        "new_room": destination_room_number,
+    }
