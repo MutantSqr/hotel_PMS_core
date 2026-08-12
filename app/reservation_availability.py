@@ -3,6 +3,20 @@
 from app.availability import is_room_available
 
 
+_ACTIVE_STATUSES = {"confirmed", "checked_in"}
+
+
+def _overlapping_active_reservation(self, room_number, check_in_date, check_out_date):
+    for existing in self.reservations.values():
+        if existing.room.room_number != room_number:
+            continue
+        if getattr(existing, "status", "confirmed") not in _ACTIVE_STATUSES:
+            continue
+        if existing.check_in_date < check_out_date and existing.check_out_date > check_in_date:
+            return existing
+    return None
+
+
 def add_reservation_with_availability(self, reservation):
     """Create a reservation only when its room/date interval is available."""
     if reservation.reservation_id in self.reservations:
@@ -18,6 +32,15 @@ def add_reservation_with_availability(self, reservation):
         reservation.check_in_date,
         reservation.check_out_date,
     ):
+        existing = _overlapping_active_reservation(
+            self, room_number, reservation.check_in_date, reservation.check_out_date
+        )
+        if existing is not None:
+            raise ValueError(
+                f"Error: Room {room_number} is already reserved "
+                f"from {existing.check_in_date} to {existing.check_out_date} "
+                f"by reservation {existing.reservation_id}"
+            )
         raise ValueError(f"Error: Room {room_number} is not available for the requested dates")
 
     room = self.rooms[room_number]
