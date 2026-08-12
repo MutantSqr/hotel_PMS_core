@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from app.models import Billing
 
 
@@ -10,18 +10,7 @@ class HotelAssistant:
         self.vehicles = {}
         self.billing_records = {}
         self.billing_counter = 0
-        # FIX: per-reservation name -> confirmation_number map, built once at
-        # add_reservation time. This replaces the old global "search every
-        # guest in the hotel by name" lookup used inside check_in/check_out,
-        # which could silently grab the wrong guest if two people shared a
-        # name anywhere in the system.
         self._reservation_guest_map = {}
-
-    # -----------------------------------------------------------------
-    # Registry methods
-    # FIX: all three now reject duplicate keys instead of silently
-    # overwriting existing rooms / reservations / guests.
-    # -----------------------------------------------------------------
 
     def add_room(self, room):
         if room.room_number in self.rooms:
@@ -47,20 +36,11 @@ class HotelAssistant:
                 f"Error: Room {reservation.room.room_number} is out of order and cannot be reserved"
             )
 
-        # FIX: a room may be reserved again after the previous guest checks
-        # out, but two active reservations may never overlap. Check the date
-        # ranges instead of using the room's current occupancy_status because
-        # that status represents the room right now, not its future inventory.
         for existing in self.reservations.values():
             if existing.room.room_number != reservation.room.room_number:
                 continue
-
-            # Completed stays no longer consume future inventory. Cancelled
-            # and no-show states will be added to this lifecycle as those
-            # workflows are implemented.
             if getattr(existing, "status", "confirmed") in {"cancelled", "no_show"}:
                 continue
-
             if self._reservation_dates_overlap(existing, reservation):
                 raise ValueError(
                     f"Error: Room {reservation.room.room_number} is already reserved "
@@ -68,11 +48,6 @@ class HotelAssistant:
                     f"by reservation {existing.reservation_id}"
                 )
 
-        # FIX: resolve every guest_name on this reservation to an actual
-        # registered Guest right now, at reservation-creation time, instead
-        # of waiting until check-in and hoping a name-based search finds the
-        # right person. Ambiguous or missing guests fail loudly, here,
-        # before the reservation is accepted.
         guest_map = {}
         for name in reservation.guest_names:
             matches = [g for g in self.guests.values() if g.name == name]
@@ -87,11 +62,6 @@ class HotelAssistant:
 
         self.reservations[reservation.reservation_id] = reservation
         self._reservation_guest_map[reservation.reservation_id] = guest_map
-
-        # A reservation exists independently of the room's current physical
-        # occupancy. Marking the room reserved here is still useful for a
-        # simple current-state display, but date overlap is what controls
-        # future inventory.
         reservation.room.occupancy_status = "reserved"
 
     def add_guest(self, guest):
@@ -99,9 +69,27 @@ class HotelAssistant:
             raise ValueError(f"Error: Guest with confirmation {guest.confirmation_number} already exists")
         self.guests[guest.confirmation_number] = guest
 
-    # -----------------------------------------------------------------
-    # Check-in / Check-out
-    # -----------------------------------------------------------------
+    def _get_reservation_guest(self, reservation_id, guest_name):
+        confirmation_number = self._reservation_guest_map[reservation_id][guest_name]
+        return self.guests[confirmation_number]
+
+    def _create_billing(self, guest, room, reservation, amount_due, tax_amount=0,
+                        payment_method="Pending"):
+        billing_id = f"BILL{self.billing_counter + 1:04d}"
+        billing = Billing(
+            billing_id=billing_id,
+            guest=guest,
+            room=room,
+            reservation=reservation,
+            amount_due=amount_due,
+            amount_paid=0,
+            tax_amount=tax_amount,
+            billing_date=datetime.now(),
+            payment_method=payment_method
+        )
+        self.billing_counter += 1
+        self.billing_records[billing_id] = billing
+        return billing
 
     def check_in_guest(self, reservation_id, guest_name, vehicle=None):
         if reservation_id not in self.reservations:
@@ -112,11 +100,9 @@ class HotelAssistant:
         if guest_name not in reservation.guest_names:
             raise ValueError(f"Error: Guest '{guest_name}' is not part of reservation {reservation_id}")
 
-        if getattr(reservation, "status", "confirmed") in {"cancelled", "no_show", "checked_out"}:
+        if reservation.status in {"cancelled", "no_show", "checked_out"}:
             raise ValueError(f"Error: Reservation {reservation_id} is not eligible for check-in")
 
-        # FIX: added guard. Previously nothing stopped the same reservation
-        # from being checked in twice.
         if reservation.checked_in:
             raise ValueError(f"Error: Reservation {reservation_id} has already been checked in")
 
@@ -126,33 +112,15 @@ class HotelAssistant:
 
         room = self.rooms[room_number]
 
-        # FIX: the old check required the room's global status to be
-        # "reserved". That breaks legitimate back-to-back stays because the
-        # prior guest checks out and makes the room "available" even though a
-        # future reservation exists. The reservation itself is the authority
-        # for this check-in; only an actually occupied room blocks it.
         if room.occupancy_status == "occupied":
             raise ValueError(f"Error: Room {room_number} is currently occupied")
 
         if room.out_of_order:
             raise ValueError(f"Error: Room {room_number} is out of order")
 
-        confirmation_number = self._reservation_guest_map[reservation_id][guest_name]
-        guest = self.guests[confirmation_number]
-
+        guest = self._get_reservation_guest(reservation_id, guest_name)
         total_bill = reservation.calculate_total_expected_bill()
-        billing_id = f"BILL{self.billing_counter + 1:04d}"
-
-        billing = Billing(
-            billing_id=billing_id,
-            guest=guest,
-            room=room,
-            reservation=reservation,
-            amount_due=total_bill,
-            amount_paid=0,
-            billing_date=datetime.now(),
-            payment_method="Pending"
-        )
+        billing = self._create_billing(guest, room, reservation, total_bill)
 
         room.occupancy_status = "occupied"
         room.current_guest = guest_name
@@ -162,14 +130,13 @@ class HotelAssistant:
             self.vehicles[vehicle.vehicle_id] = vehicle
 
         reservation.checked_in = True
-        self.billing_counter += 1
-        self.billing_records[billing_id] = billing
+        reservation.status = "checked_in"
 
         return {
             "status": "success",
             "message": f"Guest {guest_name} checked in to room {room_number}",
             "room_number": room_number,
-            "billing_id": billing_id,
+            "billing_id": billing.billing_id,
             "amount_due": total_bill,
             "vehicle": vehicle.vehicle_id if vehicle else "None"
         }
@@ -217,7 +184,6 @@ class HotelAssistant:
             vehicle_removed = room.vehicle.vehicle_id
 
         billing_record.amount_paid = amount_paid
-
         if amount_paid > 0:
             billing_record.payment_method = "Paid"
 
@@ -240,3 +206,58 @@ class HotelAssistant:
             "balance": billing_record.balance,
             "vehicle_removed": vehicle_removed if vehicle_removed else "None"
         }
+
+    def run_night_audit(self, audit_datetime, tax_rate):
+        """Process no-shows at the 2:30 AM Night Audit cutoff.
+
+        The audit at 2:30 AM processes the prior business day's arrivals.
+        A no-show is charged one room night plus tax, then its room is
+        released for future inventory.
+        """
+        if audit_datetime.hour < 2 or (audit_datetime.hour == 2 and audit_datetime.minute < 30):
+            raise ValueError("Error: Night Audit no-show processing cannot run before 2:30 AM")
+        if not 0 <= tax_rate <= 1:
+            raise ValueError("Error: Tax rate must be between 0 and 1")
+
+        arrival_date = (audit_datetime - timedelta(days=1)).date()
+        processed = []
+
+        for reservation in self.reservations.values():
+            if reservation.check_in_date.date() != arrival_date:
+                continue
+            if reservation.status != "confirmed" or reservation.checked_in:
+                continue
+
+            guest_name = reservation.guest_names[0]
+            guest = self._get_reservation_guest(reservation.reservation_id, guest_name)
+            room = reservation.room
+
+            room_charge = reservation.expected_daily_rate
+            tax_amount = round(room_charge * tax_rate, 2)
+            total_due = round(room_charge + tax_amount, 2)
+
+            billing = self._create_billing(
+                guest=guest,
+                room=room,
+                reservation=reservation,
+                amount_due=total_due,
+                tax_amount=tax_amount,
+                payment_method="No-Show Charge"
+            )
+
+            reservation.status = "no_show"
+            room.occupancy_status = "available"
+            room.current_guest = None
+            room.vehicle = None
+
+            processed.append({
+                "reservation_id": reservation.reservation_id,
+                "room_number": room.room_number,
+                "status": reservation.status,
+                "room_charge": room_charge,
+                "tax_amount": tax_amount,
+                "amount_due": total_due,
+                "billing_id": billing.billing_id
+            })
+
+        return processed
