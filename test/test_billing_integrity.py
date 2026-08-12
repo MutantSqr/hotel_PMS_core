@@ -59,7 +59,7 @@ def test_night_audit_settlement_is_single_use():
     assert len(assistant.billing_records) == 1
 
 
-def test_pm_transfer_does_not_turn_unpaid_balance_into_a_payment():
+def test_pm_transfer_records_guest_payment_and_preserves_pm_balance():
     assistant, room, guest, reservation = make_checked_in_system()
     result = assistant.check_out_guest(reservation.reservation_id, guest.name, 600.0, transfer_to_pm=True)
     billing = assistant.billing_records[result["billing_id"]]
@@ -90,6 +90,17 @@ def test_payment_history_total_always_matches_amount_paid():
     result = assistant.check_out_guest(reservation.reservation_id, guest.name, 1000.0)
     billing = assistant.billing_records[result["billing_id"]]
     assert round(sum(t["amount"] for t in billing.payment_transactions), 2) == billing.amount_paid
+
+
+def test_direct_amount_paid_mutation_is_rejected_and_ledger_is_unchanged():
+    assistant, room, guest, reservation = make_checked_in_system()
+    billing = next(iter(assistant.billing_records.values()))
+    billing.record_payment(100.0, "Visa")
+    with pytest.raises(AttributeError, match="read-only"):
+        billing.amount_paid = 500.0
+    assert billing.amount_paid == 100.0
+    assert billing.balance == 800.0
+    assert len(billing.payment_transactions) == 1
 
 
 def test_no_show_night_audit_is_idempotent():
