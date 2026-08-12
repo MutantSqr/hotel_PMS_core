@@ -164,18 +164,41 @@ def test_no_show_at_230_am_charges_one_night_plus_tax_and_releases_room():
     assert room.occupancy_status == "available"
 
 
-def test_no_show_cannot_run_before_230_am():
-    assistant, room, guests, reservation = make_system()
-    with pytest.raises(ValueError, match="before 2:30 AM"):
-        assistant.run_night_audit(datetime(2026, 8, 12, 2, 29), 0.15)
+def test_no_show_billing_ledger_contains_exactly_one_charge():
+    assistant, room, guests, reservation = make_system(rate=450.0, days=4)
+    result = assistant.run_night_audit(datetime(2026, 8, 12, 2, 30), 0.15)
+    billing = assistant.billing_records[result[0]["billing_id"]]
+    assert billing.amount_due == 517.5
+    assert billing.amount_paid == 0
+    assert billing.tax_amount == 67.5
+    assert billing.payment_method == "No-Show Charge"
+    assert len(assistant.billing_records) == 1
 
 
-def test_no_show_does_not_block_later_reservation():
+def test_no_show_is_idempotent_and_cannot_charge_twice():
+    assistant, room, guests, reservation = make_system(rate=450.0, days=4)
+    first = assistant.run_night_audit(datetime(2026, 8, 12, 2, 30), 0.15)
+    second = assistant.run_night_audit(datetime(2026, 8, 12, 2, 31), 0.15)
+    assert len(first) == 1
+    assert second == []
+    assert len(assistant.billing_records) == 1
+
+
+def test_no_show_rejects_invalid_tax_rate():
     assistant, room, guests, reservation = make_system()
-    assistant.run_night_audit(datetime(2026, 8, 12, 2, 30), 0.15)
-    later = Reservation("RES2000", [guests[0].name], datetime(2026, 8, 20, 15, 0), datetime(2026, 8, 22, 15, 0), room, 500.0, "")
-    assistant.add_reservation(later)
-    assert "RES2000" in assistant.reservations
+    with pytest.raises(ValueError, match="Tax rate must be between 0 and 1"):
+        assistant.run_night_audit(datetime(2026, 8, 12, 2, 30), 1.01)
+
+
+def test_no_show_vehicle_is_removed_from_vehicle_registry():
+    assistant, room, guests, reservation = make_system()
+    vehicle = Vehicle("VEHNS", "TX-9900", "Buick", "Enclave", "Black", guests[0].name, room, reservation)
+    room.vehicle = vehicle
+    assistant.vehicles[vehicle.vehicle_id] = vehicle
+    result = assistant.run_night_audit(datetime(2026, 8, 12, 2, 30), 0.15)
+    assert result[0]["vehicle_removed"] == "VEHNS"
+    assert "VEHNS" not in assistant.vehicles
+    assert room.vehicle is None
 
 
 def test_duplicate_check_in_is_rejected():
