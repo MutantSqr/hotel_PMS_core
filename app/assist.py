@@ -28,9 +28,45 @@ class HotelAssistant:
             raise ValueError(f"Error: Room {room.room_number} already exists")
         self.rooms[room.room_number] = room
 
+    def _reservation_dates_overlap(self, first, second):
+        """Return True when two reservations occupy the room at the same time."""
+        return (
+            first.check_in_date < second.check_out_date
+            and first.check_out_date > second.check_in_date
+        )
+
     def add_reservation(self, reservation):
         if reservation.reservation_id in self.reservations:
             raise ValueError(f"Error: Reservation {reservation.reservation_id} already exists")
+
+        if reservation.room.room_number not in self.rooms:
+            raise ValueError(f"Error: Room {reservation.room.room_number} not found")
+
+        if reservation.room.out_of_order:
+            raise ValueError(
+                f"Error: Room {reservation.room.room_number} is out of order and cannot be reserved"
+            )
+
+        # FIX: a room may be reserved again after the previous guest checks
+        # out, but two active reservations may never overlap. Check the date
+        # ranges instead of using the room's current occupancy_status because
+        # that status represents the room right now, not its future inventory.
+        for existing in self.reservations.values():
+            if existing.room.room_number != reservation.room.room_number:
+                continue
+
+            # Completed stays no longer consume future inventory. Cancelled
+            # and no-show states will be added to this lifecycle as those
+            # workflows are implemented.
+            if getattr(existing, "status", "confirmed") in {"cancelled", "no_show"}:
+                continue
+
+            if self._reservation_dates_overlap(existing, reservation):
+                raise ValueError(
+                    f"Error: Room {reservation.room.room_number} is already reserved "
+                    f"from {existing.check_in_date} to {existing.check_out_date} "
+                    f"by reservation {existing.reservation_id}"
+                )
 
         # FIX: resolve every guest_name on this reservation to an actual
         # registered Guest right now, at reservation-creation time, instead
@@ -55,8 +91,6 @@ class HotelAssistant:
         # FIX: this was the core bug. Nothing previously moved a room into
         # "reserved" status, so check_in_guest's requirement that the room
         # already be "reserved" could never be satisfied.
-        if reservation.room.out_of_order:
-            raise ValueError(f"Error: Room {reservation.room.room_number} is out of order and cannot be reserved")
         reservation.room.occupancy_status = "reserved"
 
     def add_guest(self, guest):
