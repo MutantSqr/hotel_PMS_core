@@ -1,48 +1,41 @@
 from datetime import datetime, timedelta
 
+import pytest
+
 from app.assist import HotelAssistant
-from app.models import Room
+from app.models import Guest, Reservation, Room
+
+
+def make_system(destination_status="available", showroom=False):
+    assistant = HotelAssistant()
+    old_room = Room(1501, 15, 2, [], "standard", "available", False, "", False)
+    reason = "Maintenance" if destination_status == "out_of_service" else ""
+    destination = Room(1502, 15, 2, [], "standard", destination_status, False, reason, showroom)
+    assistant.add_room(old_room)
+    assistant.add_room(destination)
+    guest = Guest("Alice", "alice@example.com", "Visa", "", "", "CONF001")
+    assistant.add_guest(guest)
+    start = datetime(2026, 8, 20, 15, 0)
+    reservation = Reservation("RES001", [guest.name], start, start + timedelta(days=2), old_room, 100, "")
+    assistant.add_reservation(reservation)
+    return assistant, old_room, destination, reservation
 
 
 def test_room_move_rejects_showroom_destination():
-    assistant = HotelAssistant()
-    old_room = Room(1501, 15, 2, [], "standard", "available", False, "", False)
-    showroom = Room(1502, 15, 2, [], "standard", "available", False, "", True)
-    assistant.add_room(old_room)
-    assistant.add_room(showroom)
+    assistant, old_room, destination, reservation = make_system(showroom=True)
 
-    from app.models import Guest, Reservation
-    guest = Guest("Alice", "alice@example.com", "Visa", "", "", "CONF001")
-    assistant.add_guest(guest)
-    start = datetime(2026, 8, 20, 15, 0)
-    reservation = Reservation("RES001", [guest.name], start, start + timedelta(days=2), old_room, 100, "")
-    assistant.add_reservation(reservation)
+    with pytest.raises(ValueError, match="not available"):
+        assistant.change_room("RES001", destination.room_number)
 
-    try:
-        assistant.change_room("RES001", 1502)
-        assert False, "Expected showroom destination to be rejected"
-    except ValueError as exc:
-        assert "not available" in str(exc)
     assert reservation.room is old_room
+    assert old_room.occupancy_status == "reserved"
 
 
 def test_room_move_rejects_out_of_service_destination():
-    assistant = HotelAssistant()
-    old_room = Room(1501, 15, 2, [], "standard", "available", False, "", False)
-    oos_room = Room(1502, 15, 2, [], "standard", "out_of_service", False, "Maintenance", False)
-    assistant.add_room(old_room)
-    assistant.add_room(oos_room)
+    assistant, old_room, destination, reservation = make_system(destination_status="out_of_service")
 
-    from app.models import Guest, Reservation
-    guest = Guest("Alice", "alice@example.com", "Visa", "", "", "CONF001")
-    assistant.add_guest(guest)
-    start = datetime(2026, 8, 20, 15, 0)
-    reservation = Reservation("RES001", [guest.name], start, start + timedelta(days=2), old_room, 100, "")
-    assistant.add_reservation(reservation)
+    with pytest.raises(ValueError, match="not available"):
+        assistant.change_room("RES001", destination.room_number)
 
-    try:
-        assistant.change_room("RES001", 1502)
-        assert False, "Expected out-of-service destination to be rejected"
-    except ValueError as exc:
-        assert "not available" in str(exc)
     assert reservation.room is old_room
+    assert old_room.occupancy_status == "reserved"
