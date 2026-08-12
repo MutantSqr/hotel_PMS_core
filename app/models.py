@@ -30,8 +30,14 @@ class Room:
             raise ValueError("Error: Room capacity must be positive")
         if room_type not in ["standard", "presidential"]:
             raise ValueError("Error: Room type must be 'standard' or 'presidential'")
-        if occupancy_status not in ["available", "occupied", "reserved"]:
-            raise ValueError("Error: Occupancy status must be 'available', 'occupied', or 'reserved'")
+        if occupancy_status not in ["available", "occupied", "reserved", "out_of_order", "out_of_service"]:
+            raise ValueError(
+                "Error: Occupancy status must be 'available', 'occupied', 'reserved', 'out_of_order', or 'out_of_service'"
+            )
+        if occupancy_status in ["out_of_order", "out_of_service"] and (
+            not out_of_order_reason or not out_of_order_reason.strip()
+        ):
+            raise ValueError(f"Error: If room is {occupancy_status}, a reason must be provided")
         if out_of_order and (not out_of_order_reason or not out_of_order_reason.strip()):
             raise ValueError("Error: If room is out of order, a reason must be provided")
         if room_type == "presidential" and floor_number != 15:
@@ -43,7 +49,7 @@ class Room:
         self.amenities = amenities
         self.room_type = room_type
         self.occupancy_status = occupancy_status
-        self.out_of_order = out_of_order
+        self.out_of_order = out_of_order or occupancy_status == "out_of_order"
         self.out_of_order_reason = out_of_order_reason
         self.showroom = showroom
         self.current_guest = None
