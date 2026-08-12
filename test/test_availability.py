@@ -11,7 +11,7 @@ BASE = datetime(2026, 8, 20, 15, 0)
 
 
 def make_room(number=1501, room_type="standard", status="available", showroom=False, out_of_order=False):
-    reason = "HVAC failure" if out_of_order else None
+    reason = "HVAC failure" if out_of_order else ("Maintenance" if status == "out_of_service" else None)
     return Room(number, 15, 2, [], room_type, status, out_of_order, reason, showroom)
 
 
