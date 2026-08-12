@@ -180,20 +180,22 @@ class HotelAssistant:
         if billing_record is None:
             raise ValueError(f"Error: No billing record found for reservation {reservation_id}")
 
-        # Validate payment and outstanding-balance rules before changing room
-        # or reservation state. Overpayment is allowed and becomes a credit.
-        billing_record.amount_paid = amount_paid
-        balance = billing_record.balance
+        # Calculate the proposed balance without mutating billing state. If
+        # checkout is rejected, the bill must remain exactly as it was.
+        proposed_balance = round(billing_record.amount_due - amount_paid, 2)
 
-        if balance > 0 and not night_audit and not transfer_to_pm:
+        if proposed_balance > 0 and not night_audit and not transfer_to_pm:
             raise ValueError(
-                f"Error: Outstanding balance of {balance:.2f} requires night audit settlement or PM account transfer"
+                f"Error: Outstanding balance of {proposed_balance:.2f} requires night audit settlement or PM account transfer"
             )
 
-        if night_audit and balance > 0:
+        # All checkout validation is complete. State changes begin here.
+        billing_record.amount_paid = amount_paid
+
+        if night_audit and proposed_balance > 0:
             billing_record.amount_paid = billing_record.amount_due
             billing_record.payment_method = "Night Audit Settlement"
-        elif transfer_to_pm and balance > 0:
+        elif transfer_to_pm and proposed_balance > 0:
             billing_record.transfer_to_pm_account()
             self.pm_accounts[billing_record.billing_id] = billing_record.balance
         elif amount_paid > 0:
