@@ -184,9 +184,6 @@ class HotelAssistant:
             if name not in self._reservation_guest_map[reservation_id]:
                 raise ValueError(f"Error: Guest '{name}' is not registered in the system")
 
-        # A room already occupied by this same reservation is valid for a later
-        # registered guest arriving separately. Only a different reservation
-        # may block the room at this point.
         if not checked_in_names and room.occupancy_status == "occupied":
             raise ValueError(f"Error: Room {room_number} is currently occupied")
 
@@ -226,10 +223,15 @@ class HotelAssistant:
         checked_in_names = list(getattr(reservation, "checked_in_guest_names", []))
         if guest_name not in reservation.guest_names:
             raise ValueError(f"Error: Guest '{guest_name}' is not part of reservation {reservation_id}")
-        if guest_name not in checked_in_names:
-            raise ValueError(f"Error: Guest '{guest_name}' has not checked in yet")
+
+        # Reservation-level terminal state must win over guest-level state.
+        # This preserves the billing contract for duplicate checkout attempts:
+        # once the reservation has settled, every later checkout is a duplicate.
         if reservation.checked_out:
             raise ValueError(f"Error: Guest '{guest_name}' has already been checked out")
+
+        if guest_name not in checked_in_names:
+            raise ValueError(f"Error: Guest '{guest_name}' has not checked in yet")
         if amount_paid < 0:
             raise ValueError("Error: Amount paid cannot be negative")
         if night_audit and transfer_to_pm:
