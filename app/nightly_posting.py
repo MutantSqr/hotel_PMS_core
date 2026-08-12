@@ -43,7 +43,7 @@ class NightlyPostingService:
             raise ValueError("Error: Reservation and folio are required")
         if not isinstance(audit_datetime, datetime):
             raise ValueError("Error: Audit timestamp is required")
-        if reservation.status != "confirmed" or not getattr(reservation, "checked_in", False):
+        if reservation.status != "checked_in" or not getattr(reservation, "checked_in", False):
             raise ValueError("Error: Only checked-in reservations can receive nightly charges")
 
         stay_date = cls._stay_date(reservation)
