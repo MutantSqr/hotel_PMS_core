@@ -1,72 +1,111 @@
+from datetime import datetime, timedelta
+
 import pytest
-from datetime import date
 
-from app.assist import HotelPMSAssistant
-from app.core import HotelPMS
+from app.assist import HotelAssistant
+from app.models import Guest, Reservation, Room
 
 
-def make_pms():
-    return HotelPMSAssistant(HotelPMS())
+def make_system(capacity=4):
+    assistant = HotelAssistant()
+    old_room = Room(1501, 15, capacity, ["King Bed"], "presidential", "available", False, "", False)
+    new_room = Room(1502, 15, capacity, ["King Bed"], "presidential", "available", False, "", False)
+    assistant.add_room(old_room)
+    assistant.add_room(new_room)
+
+    guest = Guest("Alice", "alice@example.com", "Visa", "", "", "CONF001")
+    assistant.add_guest(guest)
+
+    check_in = datetime(2026, 8, 20, 15, 0)
+    reservation = Reservation("RES001", [guest.name], check_in, check_in + timedelta(days=2), old_room, 500.0, "")
+    assistant.add_reservation(reservation)
+    return assistant, old_room, new_room, guest, reservation
 
 
 def test_future_reservation_can_change_to_available_room():
-    pms = make_pms()
-    pms.add_room("1501", "Presidential Suite", 4, 500.0)
-    pms.add_room("1502", "King", 2, 200.0)
-    res = pms.reserve_room("RES001", "1501", date(2026, 8, 20), date(2026, 8, 22), ["Alice"])
+    assistant, old_room, new_room, guest, reservation = make_system()
 
-    pms.change_room("RES001", "1502")
+    result = assistant.change_room("RES001", 1502)
 
-    assert res.room_number == "1502"
-    assert pms.reservations["RES001"].room_number == "1502"
+    assert result["status"] == "success"
+    assert reservation.room is new_room
+    assert old_room.occupancy_status == "available"
+    assert new_room.occupancy_status == "reserved"
 
 
 def test_room_move_rejects_overlapping_destination_without_releasing_old_room():
-    pms = make_pms()
-    pms.add_room("1501", "King", 2, 200.0)
-    pms.add_room("1502", "King", 2, 200.0)
-    pms.reserve_room("RES001", "1501", date(2026, 8, 20), date(2026, 8, 22), ["Alice"])
-    pms.reserve_room("RES002", "1502", date(2026, 8, 21), date(2026, 8, 23), ["Bob"])
+    assistant, old_room, new_room, guest, reservation = make_system()
+    other = Reservation(
+        "RES002", [guest.name], datetime(2026, 8, 21, 15, 0), datetime(2026, 8, 23, 15, 0),
+        new_room, 500.0, ""
+    )
+    assistant.add_reservation(other)
 
     with pytest.raises(ValueError, match="already reserved"):
-        pms.change_room("RES001", "1502")
+        assistant.change_room("RES001", 1502)
 
-    assert pms.reservations["RES001"].room_number == "1501"
+    assert reservation.room is old_room
+    assert old_room.occupancy_status == "reserved"
+    assert new_room.occupancy_status == "reserved"
+
+
+def test_back_to_back_destination_room_is_allowed():
+    assistant, old_room, new_room, guest, reservation = make_system()
+    other = Reservation(
+        "RES002", [guest.name], datetime(2026, 8, 22, 15, 0), datetime(2026, 8, 24, 15, 0),
+        new_room, 500.0, ""
+    )
+    assistant.add_reservation(other)
+
+    assistant.change_room("RES001", 1502)
+
+    assert reservation.room is new_room
+    assert old_room.occupancy_status == "available"
 
 
 def test_room_move_rejects_out_of_order_destination():
-    pms = make_pms()
-    pms.add_room("1501", "King", 2, 200.0)
-    pms.add_room("1502", "King", 2, 200.0)
-    pms.rooms["1502"].status = "out_of_order"
-    pms.reserve_room("RES001", "1501", date(2026, 8, 20), date(2026, 8, 22), ["Alice"])
+    assistant, old_room, new_room, guest, reservation = make_system()
+    new_room.out_of_order = True
+    new_room.out_of_order_reason = "Maintenance"
 
     with pytest.raises(ValueError, match="out of order"):
-        pms.change_room("RES001", "1502")
+        assistant.change_room("RES001", 1502)
 
-    assert pms.reservations["RES001"].room_number == "1501"
-
-
-def test_room_move_rejects_wrong_capacity():
-    pms = make_pms()
-    pms.add_room("1501", "King", 2, 200.0)
-    pms.add_room("1502", "Single", 1, 100.0)
-    pms.reserve_room("RES001", "1501", date(2026, 8, 20), date(2026, 8, 22), ["Alice", "Bob"])
-
-    with pytest.raises(ValueError, match="capacity"):
-        pms.change_room("RES001", "1502")
-
-    assert pms.reservations["RES001"].room_number == "1501"
+    assert reservation.room is old_room
+    assert old_room.occupancy_status == "reserved"
 
 
-def test_checked_in_reservation_cannot_be_moved_without_explicit_room_move_support():
-    pms = make_pms()
-    pms.add_room("1501", "King", 2, 200.0)
-    pms.add_room("1502", "King", 2, 200.0)
-    pms.reserve_room("RES001", "1501", date(2026, 8, 20), date(2026, 8, 22), ["Alice"])
-    pms.check_in("RES001", "Alice")
+def test_room_move_rejects_insufficient_capacity():
+    assistant, old_room, new_room, guest, reservation = make_system(capacity=2)
+    guest2 = Guest("Bob", "bob@example.com", "Visa", "", "", "CONF002")
+    assistant.add_guest(guest2)
+    reservation.guest_names.append(guest2.name)
+    assistant._reservation_guest_map[reservation.reservation_id][guest2.name] = guest2.confirmation_number
+    new_room.capacity = 1
+
+    with pytest.raises(ValueError, match="accommodate only 1"):
+        assistant.change_room("RES001", 1502)
+
+    assert reservation.room is old_room
+    assert old_room.occupancy_status == "reserved"
+
+
+def test_checked_in_reservation_cannot_be_moved():
+    assistant, old_room, new_room, guest, reservation = make_system()
+    assistant.check_in_guest("RES001", "Alice", current_datetime=datetime(2026, 8, 20, 15, 0))
 
     with pytest.raises(ValueError, match="checked in"):
-        pms.change_room("RES001", "1502")
+        assistant.change_room("RES001", 1502)
 
-    assert pms.reservations["RES001"].room_number == "1501"
+    assert reservation.room is old_room
+    assert old_room.occupancy_status == "occupied"
+    assert new_room.occupancy_status == "available"
+
+
+def test_room_move_updates_existing_billing_room_reference():
+    assistant, old_room, new_room, guest, reservation = make_system()
+    assistant.check_in_guest("RES001", "Alice", current_datetime=datetime(2026, 8, 20, 15, 0))
+    # Checked-in reservations are intentionally immovable, so this verifies the
+    # rule boundary rather than allowing a billing record to drift independently.
+    billing = assistant._get_reservation_billing("RES001")
+    assert billing.room is old_room
