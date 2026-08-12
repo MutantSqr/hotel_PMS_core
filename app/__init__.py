@@ -4,6 +4,7 @@ from app.room_status import set_room_status, mark_room_out_of_order, mark_room_o
 from app.room_inventory import set_showroom, inventory_by_type, room_is_sellable
 from app.availability import is_room_available, get_available_rooms
 from app.reservation_availability import add_reservation_with_availability
+from app.reservation_modification import modify_reservation_with_availability
 
 HotelAssistant.change_room = change_room
 HotelAssistant.set_room_status = set_room_status
@@ -16,3 +17,5 @@ HotelAssistant.room_is_sellable = room_is_sellable
 HotelAssistant.is_room_available = is_room_available
 HotelAssistant.get_available_rooms = get_available_rooms
 HotelAssistant.add_reservation = add_reservation_with_availability
+HotelAssistant._modify_reservation_legacy = HotelAssistant.modify_reservation
+HotelAssistant.modify_reservation = modify_reservation_with_availability
