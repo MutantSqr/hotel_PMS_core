@@ -50,10 +50,9 @@ class NightlyPostingService:
             raise ValueError("Error: Only checked-in reservations can receive nightly charges")
 
         stay_date = cls._stay_date(reservation)
-        departure_date = reservation.check_out_date.date()
         if audit_datetime.date() < stay_date:
             raise ValueError("Error: Cannot post a room night before arrival")
-        if audit_datetime.date() > departure_date:
+        if audit_datetime >= reservation.check_out_date:
             raise ValueError("Error: Cannot post a room night after departure")
 
         room_charge = money(reservation.expected_daily_rate)
