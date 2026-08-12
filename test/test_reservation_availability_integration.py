@@ -25,7 +25,7 @@ def test_add_reservation_uses_central_availability_for_overlap():
 
     pms.add_reservation(first)
 
-    with pytest.raises(ValueError, match="not available"):
+    with pytest.raises(ValueError, match="already reserved"):
         pms.add_reservation(second)
 
 
@@ -53,8 +53,6 @@ def test_add_reservation_rejects_showroom_through_availability_engine():
 
 def test_add_reservation_rejects_out_of_service_room_through_availability_engine():
     pms = make_pms()
-    # The Room model currently represents out-of-service through occupancy status.
-    # This test uses the central engine's supported representation.
     pms.rooms[1501].occupancy_status = "out_of_service"
     start = datetime(2026, 8, 11)
     reservation = make_reservation("RES001", start, start + timedelta(days=1), pms.rooms[1501])
