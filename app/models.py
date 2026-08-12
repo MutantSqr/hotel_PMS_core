@@ -108,7 +108,7 @@ class Vehicle:
 
 
 class Billing:
-    """Billing ledger with derived balance and credit."""
+    """Billing ledger with derived balance, credit, and payment history."""
 
     def __init__(self, billing_id, guest, room, reservation, amount_due, amount_paid, billing_date,
                  payment_method, tax_amount=0, pm_account=False):
@@ -132,11 +132,14 @@ class Billing:
         self.room = room
         self.reservation = reservation
         self.amount_due = round(amount_due, 2)
-        self._amount_paid = round(amount_paid, 2)
+        self._amount_paid = 0.0
         self.tax_amount = round(tax_amount, 2)
         self.billing_date = billing_date
         self.payment_method = payment_method
         self.pm_account = pm_account
+        self.payment_transactions = []
+        if amount_paid:
+            self.record_payment(amount_paid, payment_method)
 
     @property
     def amount_paid(self):
@@ -156,10 +159,29 @@ class Billing:
     def credit(self):
         return round(max(0, -self.balance), 2)
 
+    def record_payment(self, amount, payment_method=None):
+        if amount <= 0:
+            raise ValueError("Error: Payment amount must be greater than zero")
+        method = payment_method or self.payment_method
+        if not method or not method.strip():
+            raise ValueError("Error: Payment method cannot be empty")
+        amount = round(amount, 2)
+        transaction = {
+            "amount": amount,
+            "payment_method": method,
+            "payment_date": datetime.now(),
+        }
+        self.payment_transactions.append(transaction)
+        self._amount_paid = round(self._amount_paid + amount, 2)
+        self.payment_method = method
+        return transaction
+
     def apply_credit(self, credit):
         if credit < 0:
             raise ValueError("Error: Credit cannot be negative")
-        self._amount_paid = round(self._amount_paid + credit, 2)
+        if credit == 0:
+            return
+        self.record_payment(credit, "Credit Applied")
 
     def transfer_to_pm_account(self):
         self.pm_account = True
