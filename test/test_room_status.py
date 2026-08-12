@@ -1,7 +1,8 @@
 import pytest
+from datetime import date
 
 from app.assist import HotelAssistant
-from app.models import Room
+from app.models import Reservation, Room
 
 
 def make_pms():
@@ -52,10 +53,14 @@ def test_blocked_room_cannot_be_reserved():
     assert r.out_of_order is False
 
 
-def test_reserved_room_cannot_be_taken_out_of_service():
+def test_reserved_room_with_active_reservation_cannot_be_taken_out_of_service():
     pms = make_pms()
     r = room(status="reserved")
     pms.add_room(r)
+    reservation = Reservation(
+        "RES101", ["Alice"], date(2026, 8, 20), date(2026, 8, 22), r, 100.0, ""
+    )
+    pms.reservations[reservation.reservation_id] = reservation
 
     with pytest.raises(ValueError, match="active reservation"):
         pms.mark_room_out_of_service(101, "Renovation")
