@@ -45,18 +45,21 @@ class NightAuditService:
     def process_no_show(cls, reservation, folio, audit_datetime, tax_rate):
         if reservation is None or folio is None:
             raise ValueError("Error: Reservation and folio are required")
+
+        base_id = f"{reservation.reservation_id}-NOSHOW"
+
+        # Check idempotency before eligibility so a previously completed
+        # operation reports the duplicate explicitly even though the
+        # reservation is now marked no-show.
+        if any(charge.charge_id == f"{base_id}-ROOM" for charge in folio.charges):
+            raise ValueError("Error: No-show has already been processed")
+
         if not cls.is_no_show_eligible(reservation, audit_datetime):
             raise ValueError("Error: Reservation is not eligible for no-show processing")
 
         room_charge = money(reservation.expected_daily_rate)
         tax_charge = tax_for(room_charge, tax_rate)
         charge_date = cls.no_show_cutoff(reservation)
-        base_id = f"{reservation.reservation_id}-NOSHOW"
-
-        # The folio's charge IDs make the operation idempotent. If the room
-        # charge already exists, this reservation has already been processed.
-        if any(charge.charge_id == f"{base_id}-ROOM" for charge in folio.charges):
-            raise ValueError("Error: No-show has already been processed")
 
         folio.post_charge(
             f"{base_id}-ROOM",
