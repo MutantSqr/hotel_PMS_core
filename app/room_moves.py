@@ -3,6 +3,8 @@
 The validator performs every check before mutating reservation or room state.
 """
 
+from app.availability import is_room_available
+
 
 def change_room(self, reservation_id, destination_room_number):
     if reservation_id not in self.reservations:
@@ -26,20 +28,6 @@ def change_room(self, reservation_id, destination_room_number):
             f"Error: Room {destination_room_number} can accommodate only {destination.capacity} guests"
         )
 
-    for existing in self.reservations.values():
-        if existing.reservation_id == reservation_id:
-            continue
-        if existing.room.room_number != destination_room_number:
-            continue
-        if existing.status in {"cancelled", "no_show", "checked_out"}:
-            continue
-        if self._reservation_dates_overlap(existing, reservation):
-            raise ValueError(
-                f"Error: Room {destination_room_number} is already reserved "
-                f"from {existing.check_in_date} to {existing.check_out_date} "
-                f"by reservation {existing.reservation_id}"
-            )
-
     old_room = reservation.room
     if old_room.room_number == destination_room_number:
         return {
@@ -49,6 +37,31 @@ def change_room(self, reservation_id, destination_room_number):
             "old_room": old_room.room_number,
             "new_room": destination_room_number,
         }
+
+    if not is_room_available(
+        self,
+        destination_room_number,
+        reservation.check_in_date,
+        reservation.check_out_date,
+        excluding_reservation_id=reservation_id,
+    ):
+        for existing in self.reservations.values():
+            if existing.reservation_id == reservation_id:
+                continue
+            if existing.room.room_number != destination_room_number:
+                continue
+            if getattr(existing, "status", "confirmed") in {"cancelled", "no_show", "checked_out"}:
+                continue
+            if (
+                existing.check_in_date < reservation.check_out_date
+                and existing.check_out_date > reservation.check_in_date
+            ):
+                raise ValueError(
+                    f"Error: Room {destination_room_number} is already reserved "
+                    f"from {existing.check_in_date} to {existing.check_out_date} "
+                    f"by reservation {existing.reservation_id}"
+                )
+        raise ValueError(f"Error: Room {destination_room_number} is not available for the requested dates")
 
     # All validation has completed. Mutation starts only here.
     reservation.room = destination
