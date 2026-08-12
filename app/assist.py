@@ -19,14 +19,12 @@ class HotelAssistant:
         self.rooms[room.room_number] = room
 
     def _reservation_dates_overlap(self, first, second):
-        """Return True when two reservations occupy the room at the same time."""
         return (
             first.check_in_date < second.check_out_date
             and first.check_out_date > second.check_in_date
         )
 
     def _room_has_future_reservation(self, room_number, excluding_reservation_id=None):
-        """Return True when a confirmed reservation still owns future room inventory."""
         now = datetime.now()
         return any(
             other.reservation_id != excluding_reservation_id
@@ -43,8 +41,9 @@ class HotelAssistant:
         room_number = reservation.room.room_number
         if room_number not in self.rooms:
             raise ValueError(f"Error: Room {room_number} not found")
+        room = self.rooms[room_number]
 
-        if reservation.room.out_of_order:
+        if room.out_of_order:
             raise ValueError(f"Error: Room {room_number} is out of order and cannot be reserved")
 
         for existing in self.reservations.values():
@@ -74,10 +73,9 @@ class HotelAssistant:
         self.reservations[reservation.reservation_id] = reservation
         self._reservation_guest_map[reservation.reservation_id] = guest_map
         if room.occupancy_status != "occupied":
-            reservation.room.occupancy_status = "reserved"
+            room.occupancy_status = "reserved"
 
     def cancel_reservation(self, reservation_id):
-        """Cancel a reservation before check-in and release its room inventory."""
         if reservation_id not in self.reservations:
             raise ValueError(f"Error: Reservation {reservation_id} not found")
 
@@ -89,7 +87,6 @@ class HotelAssistant:
 
         reservation.status = "cancelled"
         room = self.rooms[reservation.room.room_number]
-
         has_future_reservation = self._room_has_future_reservation(
             room.room_number, excluding_reservation_id=reservation_id
         )
@@ -162,8 +159,6 @@ class HotelAssistant:
         if room.occupancy_status == "occupied":
             raise ValueError(f"Error: Room {room_number} is currently occupied")
 
-        # Protect against a corrupted room status: reservation data remains the
-        # source of truth for whether another guest is physically checked in.
         for other in self.reservations.values():
             if other.reservation_id == reservation_id:
                 continue
@@ -290,7 +285,6 @@ class HotelAssistant:
         }
 
     def run_night_audit(self, audit_datetime, tax_rate):
-        """Process arrivals from the prior business date at the 2:30 AM cutoff."""
         if audit_datetime.hour < 2 or (audit_datetime.hour == 2 and audit_datetime.minute < 30):
             raise ValueError("Error: Night Audit no-show processing cannot run before 2:30 AM")
         if not 0 <= tax_rate <= 1:
@@ -325,6 +319,9 @@ class HotelAssistant:
             room.current_guest = None
             room.current_guests = []
             room.vehicle = None
+
+            if self._room_has_future_reservation(room.room_number, excluding_reservation_id=reservation.reservation_id):
+                room.occupancy_status = "reserved"
 
             processed.append({
                 "reservation_id": reservation.reservation_id,
