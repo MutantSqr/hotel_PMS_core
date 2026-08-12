@@ -88,9 +88,10 @@ class HotelAssistant:
         self.reservations[reservation.reservation_id] = reservation
         self._reservation_guest_map[reservation.reservation_id] = guest_map
 
-        # FIX: this was the core bug. Nothing previously moved a room into
-        # "reserved" status, so check_in_guest's requirement that the room
-        # already be "reserved" could never be satisfied.
+        # A reservation exists independently of the room's current physical
+        # occupancy. Marking the room reserved here is still useful for a
+        # simple current-state display, but date overlap is what controls
+        # future inventory.
         reservation.room.occupancy_status = "reserved"
 
     def add_guest(self, guest):
@@ -111,6 +112,9 @@ class HotelAssistant:
         if guest_name not in reservation.guest_names:
             raise ValueError(f"Error: Guest '{guest_name}' is not part of reservation {reservation_id}")
 
+        if getattr(reservation, "status", "confirmed") in {"cancelled", "no_show", "checked_out"}:
+            raise ValueError(f"Error: Reservation {reservation_id} is not eligible for check-in")
+
         # FIX: added guard. Previously nothing stopped the same reservation
         # from being checked in twice.
         if reservation.checked_in:
@@ -122,14 +126,17 @@ class HotelAssistant:
 
         room = self.rooms[room_number]
 
-        if room.occupancy_status != "reserved":
-            raise ValueError(f"Error: Room {room_number} is not reserved for this guest")
+        # FIX: the old check required the room's global status to be
+        # "reserved". That breaks legitimate back-to-back stays because the
+        # prior guest checks out and makes the room "available" even though a
+        # future reservation exists. The reservation itself is the authority
+        # for this check-in; only an actually occupied room blocks it.
+        if room.occupancy_status == "occupied":
+            raise ValueError(f"Error: Room {room_number} is currently occupied")
 
         if room.out_of_order:
             raise ValueError(f"Error: Room {room_number} is out of order")
 
-        # FIX: O(1) lookup via the map built in add_reservation, instead of
-        # scanning every guest in the hotel by name.
         confirmation_number = self._reservation_guest_map[reservation_id][guest_name]
         guest = self.guests[confirmation_number]
 
@@ -179,9 +186,6 @@ class HotelAssistant:
         if not reservation.checked_in:
             raise ValueError(f"Error: Guest '{guest_name}' has not checked in yet")
 
-        # FIX: added guard. Previously nothing stopped a reservation from
-        # being checked out twice, which would double-clear the vehicle
-        # and re-flip an already-available room.
         if reservation.checked_out:
             raise ValueError(f"Error: Guest '{guest_name}' has already been checked out")
 
@@ -197,8 +201,6 @@ class HotelAssistant:
         if room.current_guest != guest_name:
             raise ValueError(f"Error: Guest '{guest_name}' is not currently in room {room_number}")
 
-        # FIX: match the billing record by confirmation number rather than
-        # by name, using the same resolved map from add_reservation.
         confirmation_number = self._reservation_guest_map[reservation_id][guest_name]
         billing_record = next(
             (b for b in self.billing_records.values()
@@ -214,8 +216,6 @@ class HotelAssistant:
         if room.vehicle:
             vehicle_removed = room.vehicle.vehicle_id
 
-        # amount_paid is now a validated property on Billing itself; balance
-        # is derived automatically and can no longer be set directly.
         billing_record.amount_paid = amount_paid
 
         if amount_paid > 0:
@@ -228,6 +228,7 @@ class HotelAssistant:
         room.occupancy_status = "available"
         room.current_guest = None
         reservation.checked_out = True
+        reservation.status = "checked_out"
 
         return {
             "status": "success",
