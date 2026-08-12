@@ -318,7 +318,12 @@ class HotelAssistant:
             room.occupancy_status = "available"
             room.current_guest = None
             room.current_guests = []
-            room.vehicle = None
+
+            vehicle_removed = None
+            if room.vehicle:
+                vehicle_removed = room.vehicle.vehicle_id
+                self.vehicles.pop(vehicle_removed, None)
+                room.vehicle = None
 
             if self._room_has_future_reservation(room.room_number, excluding_reservation_id=reservation.reservation_id):
                 room.occupancy_status = "reserved"
@@ -330,7 +335,8 @@ class HotelAssistant:
                 "room_charge": room_charge,
                 "tax_amount": tax_amount,
                 "amount_due": total_due,
-                "billing_id": billing.billing_id
+                "billing_id": billing.billing_id,
+                "vehicle_removed": vehicle_removed if vehicle_removed else "None"
             })
 
         return processed
