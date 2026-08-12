@@ -29,6 +29,8 @@ def test_duplicate_checkout_cannot_create_second_settlement():
     billing = assistant.billing_records[first["billing_id"]]
     assert billing.amount_paid == 900.0
     assert billing.balance == 0
+    assert len(billing.payment_transactions) == 1
+    assert billing.payment_transactions[0]["amount"] == 900.0
 
 
 def test_failed_partial_checkout_does_not_record_payment():
@@ -38,6 +40,7 @@ def test_failed_partial_checkout_does_not_record_payment():
         assistant.check_out_guest(reservation.reservation_id, guest.name, 899.99)
     assert billing.amount_paid == 0
     assert billing.balance == 900.0
+    assert billing.payment_transactions == []
     assert reservation.checked_out is False
     assert room.occupancy_status == "occupied"
 
@@ -50,6 +53,9 @@ def test_night_audit_settlement_is_single_use():
     billing = assistant.billing_records[first["billing_id"]]
     assert billing.amount_paid == 900.0
     assert billing.balance == 0
+    assert len(billing.payment_transactions) == 1
+    assert billing.payment_transactions[0]["amount"] == 900.0
+    assert billing.payment_transactions[0]["payment_method"] == "Night Audit Settlement"
     assert len(assistant.billing_records) == 1
 
 
@@ -62,6 +68,9 @@ def test_pm_transfer_does_not_turn_unpaid_balance_into_a_payment():
     assert billing.balance == 300.0
     assert billing.pm_account is True
     assert assistant.pm_accounts[result["billing_id"]] == 300.0
+    assert len(billing.payment_transactions) == 1
+    assert billing.payment_transactions[0]["amount"] == 600.0
+    assert billing.payment_transactions[0]["payment_method"] == "Paid"
 
 
 def test_overpayment_is_recorded_once_as_credit():
@@ -71,7 +80,16 @@ def test_overpayment_is_recorded_once_as_credit():
     assert billing.amount_paid == 1000.0
     assert billing.balance == -100.0
     assert billing.credit == 100.0
+    assert len(billing.payment_transactions) == 1
+    assert sum(t["amount"] for t in billing.payment_transactions) == 1000.0
     assert len(assistant.billing_records) == 1
+
+
+def test_payment_history_total_always_matches_amount_paid():
+    assistant, room, guest, reservation = make_checked_in_system()
+    result = assistant.check_out_guest(reservation.reservation_id, guest.name, 1000.0)
+    billing = assistant.billing_records[result["billing_id"]]
+    assert round(sum(t["amount"] for t in billing.payment_transactions), 2) == billing.amount_paid
 
 
 def test_no_show_night_audit_is_idempotent():
@@ -94,3 +112,4 @@ def test_no_show_night_audit_is_idempotent():
     assert billing.amount_due == 517.50
     assert billing.tax_amount == 67.50
     assert billing.amount_paid == 0
+    assert billing.payment_transactions == []
