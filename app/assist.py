@@ -64,6 +64,40 @@ class HotelAssistant:
         self._reservation_guest_map[reservation.reservation_id] = guest_map
         reservation.room.occupancy_status = "reserved"
 
+    def cancel_reservation(self, reservation_id):
+        """Cancel a reservation before check-in and release its room inventory."""
+        if reservation_id not in self.reservations:
+            raise ValueError(f"Error: Reservation {reservation_id} not found")
+
+        reservation = self.reservations[reservation_id]
+        if reservation.status != "confirmed" or reservation.checked_in or reservation.checked_out:
+            raise ValueError(
+                f"Error: Reservation {reservation_id} cannot be cancelled from status '{reservation.status}'"
+            )
+
+        reservation.status = "cancelled"
+        room = self.rooms[reservation.room.room_number]
+
+        # A room may have a later, non-overlapping reservation. Keep it reserved
+        # rather than making inventory look available when it is already committed.
+        has_active_reservation = any(
+            other.reservation_id != reservation_id
+            and other.room.room_number == room.room_number
+            and getattr(other, "status", "confirmed") == "confirmed"
+            for other in self.reservations.values()
+        )
+
+        if not has_active_reservation and room.occupancy_status != "occupied":
+            room.occupancy_status = "available"
+
+        return {
+            "status": "success",
+            "message": f"Reservation {reservation_id} cancelled",
+            "reservation_id": reservation_id,
+            "room_number": room.room_number,
+            "room_status": room.occupancy_status,
+        }
+
     def add_guest(self, guest):
         if guest.confirmation_number in self.guests:
             raise ValueError(f"Error: Guest with confirmation {guest.confirmation_number} already exists")
