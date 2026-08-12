@@ -147,9 +147,7 @@ class Billing:
 
     @amount_paid.setter
     def amount_paid(self, value):
-        if value < 0:
-            raise ValueError("Error: Amount paid cannot be negative")
-        self._amount_paid = round(value, 2)
+        raise AttributeError("Error: amount_paid is read-only; use record_payment() to preserve the payment ledger")
 
     @property
     def balance(self):
