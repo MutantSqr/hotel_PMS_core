@@ -250,8 +250,13 @@ class HotelAssistant:
             if billing_record.balance > 0:
                 billing_record.record_payment(billing_record.balance, "Night Audit Settlement")
         elif transfer_to_pm and proposed_balance > 0:
+            if amount_paid > 0:
+                billing_record.record_payment(amount_paid, "Paid")
+            remaining_balance = billing_record.balance
+            if remaining_balance <= 0:
+                raise ValueError("Error: PM account transfer requires an outstanding balance")
             billing_record.transfer_to_pm_account()
-            self.pm_accounts[billing_record.billing_id] = proposed_balance
+            self.pm_accounts[billing_record.billing_id] = remaining_balance
         elif amount_paid > 0:
             billing_record.record_payment(amount_paid, "Paid")
 
