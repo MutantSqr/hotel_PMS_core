@@ -246,15 +246,14 @@ class HotelAssistant:
                 f"Error: Outstanding balance of {proposed_balance:.2f} requires night audit settlement or PM account transfer"
             )
 
-        billing_record.amount_paid = amount_paid
-        if night_audit and proposed_balance > 0:
-            billing_record.amount_paid = billing_record.amount_due
-            billing_record.payment_method = "Night Audit Settlement"
+        if night_audit:
+            if billing_record.balance > 0:
+                billing_record.record_payment(billing_record.balance, "Night Audit Settlement")
         elif transfer_to_pm and proposed_balance > 0:
             billing_record.transfer_to_pm_account()
-            self.pm_accounts[billing_record.billing_id] = billing_record.balance
+            self.pm_accounts[billing_record.billing_id] = proposed_balance
         elif amount_paid > 0:
-            billing_record.payment_method = "Paid"
+            billing_record.record_payment(amount_paid, "Paid")
 
         vehicle_removed = None
         if room.vehicle:
