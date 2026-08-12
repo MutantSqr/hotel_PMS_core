@@ -90,6 +90,84 @@ def test_back_to_back_reservation_is_allowed():
     assert "RES1002" in assistant.reservations
 
 
+def test_cancel_confirmed_reservation_releases_room():
+    assistant, room, guests, reservation = make_system()
+
+    result = assistant.cancel_reservation(reservation.reservation_id)
+
+    assert result["status"] == "success"
+    assert reservation.status == "cancelled"
+    assert room.occupancy_status == "available"
+
+
+def test_cancelled_reservation_does_not_block_same_dates():
+    assistant, room, guests, reservation = make_system()
+    assistant.cancel_reservation(reservation.reservation_id)
+
+    replacement = Reservation(
+        "RES1003", [guests[0].name],
+        datetime(2026, 8, 11, 15, 0), datetime(2026, 8, 13, 15, 0),
+        room, 500.0, ""
+    )
+
+    assistant.add_reservation(replacement)
+    assert replacement.status == "confirmed"
+
+
+def test_cancelled_reservation_cannot_be_checked_in():
+    assistant, room, guests, reservation = make_system()
+    assistant.cancel_reservation(reservation.reservation_id)
+
+    with pytest.raises(ValueError, match="not eligible for check-in"):
+        assistant.check_in_guest(reservation.reservation_id, guests[0].name)
+
+
+def test_checked_in_reservation_cannot_be_cancelled():
+    assistant, room, guests, reservation = make_system()
+    assistant.check_in_guest(reservation.reservation_id, guests[0].name)
+
+    with pytest.raises(ValueError, match="cannot be cancelled"):
+        assistant.cancel_reservation(reservation.reservation_id)
+
+    assert reservation.status == "checked_in"
+    assert room.occupancy_status == "occupied"
+
+
+def test_checked_out_reservation_cannot_be_cancelled():
+    assistant, room, guests, reservation = make_system()
+    assistant.check_in_guest(reservation.reservation_id, guests[0].name)
+    assistant.check_out_guest(reservation.reservation_id, guests[0].name, 900.0)
+
+    with pytest.raises(ValueError, match="cannot be cancelled"):
+        assistant.cancel_reservation(reservation.reservation_id)
+
+    assert reservation.status == "checked_out"
+
+
+def test_cancelled_reservation_cannot_be_cancelled_again():
+    assistant, room, guests, reservation = make_system()
+    assistant.cancel_reservation(reservation.reservation_id)
+
+    with pytest.raises(ValueError, match="cannot be cancelled"):
+        assistant.cancel_reservation(reservation.reservation_id)
+
+
+def test_cancel_does_not_make_room_available_when_later_reservation_exists():
+    assistant, room, guests, reservation = make_system()
+
+    later = Reservation(
+        "RES1004", [guests[0].name],
+        datetime(2026, 8, 13, 15, 0), datetime(2026, 8, 15, 15, 0),
+        room, 500.0, ""
+    )
+    assistant.add_reservation(later)
+
+    result = assistant.cancel_reservation(reservation.reservation_id)
+
+    assert result["room_status"] == "reserved"
+    assert room.occupancy_status == "reserved"
+
+
 def test_normal_check_in_and_paid_checkout():
     assistant, room, guests, reservation = make_system()
 
