@@ -8,7 +8,7 @@ from app.models import Guest, Reservation, Room
 
 def make_system():
     assistant = HotelAssistant()
-    room = Room(1501, 15, 2, ["King Bed"], "king", "available", False, "", False)
+    room = Room(1501, 15, 2, ["King Bed"], "standard", "available", False, "", False)
     guest = Guest("Alice", "alice@example.com", "Visa", "", "", "G001")
     assistant.add_room(room)
     assistant.add_guest(guest)
