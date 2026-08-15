@@ -1,35 +1,69 @@
 from datetime import datetime, timedelta
-from app.models import Room, Guest, Reservation, Vehicle
-from app.assistant import HotelAssistant
+
+from app import HotelAssistant
+from app.models import Guest, Reservation, Room, Vehicle
 
 
 def run_demo():
+    """Run a small end-to-end PMS domain demonstration."""
     assistant = HotelAssistant()
 
-    # 1. Initialize System Components
-    room = Room(1501, 15, 4, ["King Bed", "Ocean View"], "presidential", "reserved", False, "", False)
-    guest = Guest("Rondrick Bowser", "rondrick@example.com", "Visa ending 4242", "Vanguard Fleet", "High floor",
-                  "CONF999")
+    room = Room(
+        1501,
+        15,
+        4,
+        ["King Bed", "Ocean View"],
+        "presidential",
+        "reserved",
+        False,
+        "",
+        False,
+    )
+    guest = Guest(
+        "Demo Guest",
+        "demo@example.com",
+        "Demo Payment Method",
+        "Demo Group",
+        "High floor",
+        "CONF-DEMO",
+    )
 
     check_in_date = datetime.now()
     check_out_date = check_in_date + timedelta(days=2)
-    reservation = Reservation("RES999", ["Rondrick Bowser"], check_in_date, check_out_date, room, 450.0, "Extra Towels")
+    reservation = Reservation(
+        "RES-DEMO",
+        [guest.name],
+        check_in_date,
+        check_out_date,
+        room,
+        450.0,
+        "Extra Towels",
+    )
+    vehicle = Vehicle(
+        "VEH-DEMO",
+        "TX-DEMO",
+        "Demo",
+        "Vehicle",
+        "Black",
+        guest.name,
+        room,
+        reservation,
+    )
 
-    vehicle = Vehicle("VEH01", "TX-8890", "Buick", "Enclave", "Black", "Rondrick Bowser", room, reservation)
-
-    # 2. Register with State Assistant
     assistant.add_room(room)
     assistant.add_guest(guest)
     assistant.add_reservation(reservation)
 
-    # 3. Simulate Operations
-    print("--- Executing Check-In Telemetry ---")
-    check_in_telemetry = assistant.check_in_guest("RES999", "Rondrick Bowser", vehicle=vehicle)
-    print(check_in_telemetry)
+    print("=== Hotel PMS Core Demo ===")
+    print("Reservation: RES-DEMO")
+    print("Room: 1501 (Presidential Suite)")
+    print("Stay: 2 nights")
 
-    print("\n--- Executing Check-Out Telemetry ---")
-    check_out_telemetry = assistant.check_out_guest("RES999", "Rondrick Bowser", amount_paid=900.0)
-    print(check_out_telemetry)
+    print("\n--- Check-In ---")
+    print(assistant.check_in_guest("RES-DEMO", guest.name, vehicle=vehicle))
+
+    print("\n--- Check-Out ---")
+    print(assistant.check_out_guest("RES-DEMO", guest.name, amount_paid=900.0))
 
 
 if __name__ == "__main__":
