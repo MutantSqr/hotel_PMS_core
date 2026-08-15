@@ -72,6 +72,16 @@ The project intentionally emphasizes **fail-safe behavior**. Examples include:
 - Nightly charges must be eligible for posting and must not be duplicated.
 - Failed financial operations should leave the prior valid state unchanged.
 
+## Quick Demo
+
+The repository includes a small end-to-end demonstration covering room registration, guest registration, reservation creation, vehicle linkage, check-in, and checkout.
+
+```bash
+python main/main.py
+```
+
+The demo uses fictional data and does not connect to a real hotel, payment system, or guest database.
+
 ## Testing
 
 The repository contains regression coverage for reservation availability, reservation modification, room inventory, room moves, check-in guardrails, multi-guest check-in, billing integrity, folio behavior, and night-audit posting.
