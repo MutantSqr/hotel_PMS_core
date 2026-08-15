@@ -74,17 +74,23 @@ The project intentionally emphasizes **fail-safe behavior**. Examples include:
 
 ## Quick Demo
 
-The repository includes a small end-to-end demonstration covering room registration, guest registration, reservation creation, vehicle linkage, check-in, and checkout.
+The repository includes an end-to-end financial demonstration covering room registration, guest registration, reservation creation, guarded check-in, transaction-based folio activity, night-audit room/tax posting, payment, and checkout.
+
+```bash
+python -m app.demo
+```
+
+A second operational walkthrough is available through:
 
 ```bash
 python main/main.py
 ```
 
-The demo uses fictional data and does not connect to a real hotel, payment system, or guest database.
+Both demos use fictional data and do not connect to a real hotel, payment system, or guest database.
 
 ## Testing
 
-The repository contains regression coverage for reservation availability, reservation modification, room inventory, room moves, check-in guardrails, multi-guest check-in, billing integrity, folio behavior, and night-audit posting.
+The repository contains regression coverage for the demonstration workflow and night-audit posting guardrails.
 
 Run the test suite locally with:
 
@@ -93,7 +99,7 @@ python -m pip install -r requirements.txt
 python -m pytest -q
 ```
 
-GitHub Actions runs the test suite on pushes and pull requests targeting `main`.
+GitHub Actions runs the test suite on pushes to `main` and the presentation branch, plus pull requests targeting `main`.
 
 ## Project Status
 
@@ -109,6 +115,8 @@ The project is intentionally **not presented as production-ready hotel software*
 - [x] Transaction-oriented billing foundation
 - [x] Night-audit no-show guardrails
 - [x] Nightly room/tax posting guardrails
+- [x] Runnable end-to-end demonstration
+- [x] Regression coverage for the demonstration workflow
 - [ ] Security architecture and authorization boundary
 - [ ] Persistent database layer
 - [ ] API/application boundary
