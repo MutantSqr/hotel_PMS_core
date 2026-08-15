@@ -57,13 +57,25 @@ def test_rejects_future_arrival():
         )
 
 
-def test_rejects_posting_on_departure_date():
+def test_allows_departure_date_night_audit_before_checkout():
     reservation = make_reservation()
     folio = make_folio()
 
-    with pytest.raises(ValueError, match="on or after departure"):
+    result = NightlyPostingService.post_room_night(
+        reservation, folio, datetime(2026, 8, 13, 2, 45), 0.10
+    )
+
+    assert result["status"] == "success"
+    assert folio.total_charges == Decimal("220.00")
+
+
+def test_rejects_posting_after_departure():
+    reservation = make_reservation()
+    folio = make_folio()
+
+    with pytest.raises(ValueError, match="after departure"):
         NightlyPostingService.post_room_night(
-            reservation, folio, datetime(2026, 8, 13, 2, 45), 0.10
+            reservation, folio, datetime(2026, 8, 13, 11, 1), 0.10
         )
 
 

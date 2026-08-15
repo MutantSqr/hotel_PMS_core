@@ -314,7 +314,8 @@ class HotelAssistant:
             "billing_id": billing.billing_id,
             "amount_due": billing.amount_due,
             "vehicle": vehicle.vehicle_id if vehicle else "None",
-            "guests": check_in_names
+            "guests": check_in_names,
+            "reservation_status": reservation.status
         }
 
     def check_out_guest(self, reservation_id, guest_name, amount_paid=0, night_audit=False, transfer_to_pm=False):
