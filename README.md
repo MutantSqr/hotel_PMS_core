@@ -90,20 +90,20 @@ Both demos use fictional data and do not connect to a real hotel, payment system
 
 ## Testing
 
-The repository contains regression coverage for the demonstration workflow and night-audit posting guardrails.
+The repository contains regression coverage across reservation availability and modification, room inventory, check-in guardrails, multi-guest stays, billing and folio integrity, night-audit posting, and the end-to-end demonstration workflow.
 
-Run the test suite locally with:
+Run the full test suite locally with:
 
 ```bash
 python -m pip install -r requirements.txt
 python -m pytest -q
 ```
 
-GitHub Actions runs the test suite on pushes to `main` and the presentation branch, plus pull requests targeting `main`.
+GitHub Actions runs the same suite on pushes to `main` and the presentation branch, plus pull requests targeting `main`.
 
 ## Project Status
 
-**Current stage:** Core domain and financial guardrails are being hardened toward presentation-ready portfolio quality.
+**Current stage:** Core domain and financial guardrails are presentation-ready as a portfolio demonstration.
 
 The project is intentionally **not presented as production-ready hotel software**. Security, authentication/authorization, persistent storage, API boundaries, deployment, compliance, and operational controls remain explicit future work before any real-world production deployment.
 
@@ -117,6 +117,7 @@ The project is intentionally **not presented as production-ready hotel software*
 - [x] Nightly room/tax posting guardrails
 - [x] Runnable end-to-end demonstration
 - [x] Regression coverage for the demonstration workflow
+- [x] Presentation-focused repository cleanup
 - [ ] Security architecture and authorization boundary
 - [ ] Persistent database layer
 - [ ] API/application boundary
