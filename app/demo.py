@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from app.assist import HotelAssistant
 from app.folio import Folio
